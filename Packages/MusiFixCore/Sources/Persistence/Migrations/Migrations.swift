@@ -6,6 +6,7 @@ public enum Migrations {
     public static func register(in migrator: inout DatabaseMigrator) {
         migrator.registerMigration("v1_initial_schema", migrate: v1)
         migrator.registerMigration("v1_fts5", migrate: v1_fts5)
+        migrator.registerMigration("v2_operation_batchid", migrate: v2_operation_batchid)
     }
 
     // ── v1: schema principale ─────────────────────────────────────────────────
@@ -107,6 +108,14 @@ public enum Migrations {
             t.column("value", .text).notNull()
             t.column("updatedAt", .datetime).notNull()
         }
+    }
+
+    // ── v2: batchID su operation_log ─────────────────────────────────────────────
+    private static func v2_operation_batchid(_ db: Database) throws {
+        try db.alter(table: "operation_log") { t in
+            t.add(column: "batchID", .text)
+        }
+        try db.create(index: "oplog_batchid", on: "operation_log", columns: ["batchID"])
     }
 
     // ── v1_fts5: ricerca full-text ─────────────────────────────────────────────

@@ -101,6 +101,17 @@ struct TrackTableView: NSViewRepresentable {
         }
 
         @objc func rowClicked(_ sender: Any) {}
+
+        func tableViewSelectionDidChange(_ notification: Notification) {
+            guard let tv = tableView else { return }
+            var pids = Set<String>()
+            tv.selectedRowIndexes.forEach { row in
+                if row < viewModel.tracks.count {
+                    pids.insert(viewModel.tracks[row].persistentID)
+                }
+            }
+            viewModel.selectedPIDs = pids
+        }
     }
 }
 

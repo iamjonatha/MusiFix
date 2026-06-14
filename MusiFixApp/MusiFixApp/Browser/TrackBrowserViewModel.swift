@@ -9,6 +9,12 @@ final class TrackBrowserViewModel: ObservableObject {
     @Published var sortField: TrackSortField = .artist
     @Published var sortAscending: Bool = true
     @Published var filter: TrackFilter = .none
+    @Published var selectedPIDs: Set<String> = []
+
+    var selectedTracks: [DBTrack] {
+        let pids = selectedPIDs
+        return tracks.filter { pids.contains($0.persistentID) }
+    }
 
     private var searchTask: Task<Void, Never>?
     private let pageSize = 200

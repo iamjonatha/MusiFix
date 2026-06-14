@@ -12,6 +12,11 @@
 		AA000003 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000003 /* AppState.swift */; };
 		AA000004 /* TrackBrowserViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000004 /* TrackBrowserViewModel.swift */; };
 		AA000005 /* TrackTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000005 /* TrackTableView.swift */; };
+		AA000020 /* TrackEditorPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000020 /* TrackEditorPanel.swift */; };
+		AA000021 /* ArtworkEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000021 /* ArtworkEditorView.swift */; };
+		AA000022 /* BatchEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000022 /* BatchEditorView.swift */; };
+		AA000023 /* DiffPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000023 /* DiffPreviewView.swift */; };
+		AA000024 /* OperationLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000024 /* OperationLogView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,6 +27,11 @@
 		BB000005 /* TrackTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackTableView.swift; sourceTree = "<group>"; };
 		BB000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BB000011 /* MusiFixApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MusiFixApp.entitlements; sourceTree = "<group>"; };
+		BB000020 /* TrackEditorPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackEditorPanel.swift; sourceTree = "<group>"; };
+		BB000021 /* ArtworkEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtworkEditorView.swift; sourceTree = "<group>"; };
+		BB000022 /* BatchEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchEditorView.swift; sourceTree = "<group>"; };
+		BB000023 /* DiffPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPreviewView.swift; sourceTree = "<group>"; };
+		BB000024 /* OperationLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationLogView.swift; sourceTree = "<group>"; };
 		CC000001 /* MusiFixApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusiFixApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -43,6 +53,7 @@
 				BB000002 /* ContentView.swift */,
 				BB000003 /* AppState.swift */,
 				EE000002 /* Browser */,
+				EE000003 /* Editor */,
 				BB000010 /* Info.plist */,
 				BB000011 /* MusiFixApp.entitlements */,
 			);
@@ -56,6 +67,18 @@
 				BB000005 /* TrackTableView.swift */,
 			);
 			path = Browser;
+			sourceTree = "<group>";
+		};
+		EE000003 /* Editor */ = {
+			isa = PBXGroup;
+			children = (
+				BB000020 /* TrackEditorPanel.swift */,
+				BB000021 /* ArtworkEditorView.swift */,
+				BB000022 /* BatchEditorView.swift */,
+				BB000023 /* DiffPreviewView.swift */,
+				BB000024 /* OperationLogView.swift */,
+			);
+			path = Editor;
 			sourceTree = "<group>";
 		};
 		EE000000 /* root */ = {
@@ -155,6 +178,11 @@
 				AA000003 /* AppState.swift in Sources */,
 				AA000004 /* TrackBrowserViewModel.swift in Sources */,
 				AA000005 /* TrackTableView.swift in Sources */,
+				AA000020 /* TrackEditorPanel.swift in Sources */,
+				AA000021 /* ArtworkEditorView.swift in Sources */,
+				AA000022 /* BatchEditorView.swift in Sources */,
+				AA000023 /* DiffPreviewView.swift in Sources */,
+				AA000024 /* OperationLogView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -129,6 +129,16 @@ public struct DBOperation: Codable, FetchableRecord, PersistableRecord, Sendable
     public var performedAt: Date
     public var status: String             // "pending" | "done" | "failed" | "undone"
     public var errorMessage: String?
+    public var batchID: String?           // raggruppa le operazioni di una stessa scrittura
+
+    public init(id: Int64? = nil, persistentID: String, field: String,
+                valueBefore: String?, valueAfter: String?, performedAt: Date,
+                status: String = "pending", errorMessage: String? = nil, batchID: String? = nil) {
+        self.id = id; self.persistentID = persistentID; self.field = field
+        self.valueBefore = valueBefore; self.valueAfter = valueAfter
+        self.performedAt = performedAt; self.status = status
+        self.errorMessage = errorMessage; self.batchID = batchID
+    }
 }
 
 public struct DBEnrichmentCache: Codable, FetchableRecord, PersistableRecord, Sendable {
