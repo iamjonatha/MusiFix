@@ -52,7 +52,7 @@ struct TrackEditorPanel: View {
             Divider()
 
             // Artwork
-            ArtworkEditorView(pid: track.persistentID, appState: appState)
+            ArtworkEditorView(track: track, appState: appState)
                 .frame(height: 130)
 
             Divider()

@@ -1,16 +1,20 @@
 import SwiftUI
 import AppKit
 import MusiFixCore
+import Persistence
 
-/// Visualizza la copertina corrente e permette di sostituirla.
+/// Visualizza la copertina corrente e permette di sostituirla (file, clipboard, ricerca online).
 struct ArtworkEditorView: View {
-    let pid: String
+    let track: DBTrack
     let appState: AppState
 
     @State private var image: NSImage? = nil
     @State private var isLoading = false
     @State private var isReplacing = false
     @State private var error: String? = nil
+    @State private var showEnrichment = false
+
+    var pid: String { track.persistentID }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -38,13 +42,14 @@ struct ArtworkEditorView: View {
                 if let img = image {
                     let rep = img.representations.first
                     Text("\(rep?.pixelsWide ?? 0) × \(rep?.pixelsHigh ?? 0) px")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Button("Da file…") { pickFromFile() }
-                    .disabled(isReplacing)
+                Button("Da file…") { pickFromFile() }.disabled(isReplacing)
                 Button("Dagli appunti") { pasteFromClipboard() }
-                    .disabled(isReplacing || !NSPasteboard.general.canReadItem(withDataConformingToTypes: [NSPasteboard.PasteboardType.tiff.rawValue, "public.png", "public.jpeg"]))
+                    .disabled(isReplacing || !NSPasteboard.general.canReadItem(
+                        withDataConformingToTypes: [NSPasteboard.PasteboardType.tiff.rawValue,
+                                                    "public.png", "public.jpeg"]))
+                Button("Cerca online…") { showEnrichment = true }.disabled(isReplacing)
                 if isReplacing {
                     HStack(spacing: 4) {
                         ProgressView().scaleEffect(0.6)
@@ -60,20 +65,22 @@ struct ArtworkEditorView: View {
         .padding(12)
         .onAppear { loadArtwork() }
         .onChange(of: pid) { _, _ in loadArtwork() }
+        .sheet(isPresented: $showEnrichment) {
+            EnrichmentSearchView(
+                track: track,
+                appState: appState,
+                onApplied: { loadArtwork() },
+                isPresented: $showEnrichment
+            )
+        }
     }
 
     private func loadArtwork() {
-        isLoading = true
-        image = nil
-        error = nil
-        let bridge = appState.bridge
-        let p = pid
+        isLoading = true; image = nil; error = nil
+        let bridge = appState.bridge; let p = pid
         Task {
             let data = try? await bridge.artwork(persistentID: p)
-            await MainActor.run {
-                isLoading = false
-                if let d = data { image = NSImage(data: d) }
-            }
+            await MainActor.run { isLoading = false; if let d = data { image = NSImage(data: d) } }
         }
     }
 
@@ -88,27 +95,18 @@ struct ArtworkEditorView: View {
 
     private func pasteFromClipboard() {
         let pb = NSPasteboard.general
-        guard let img = NSImage(pasteboard: pb),
-              let tiff = img.tiffRepresentation else { return }
+        guard let img = NSImage(pasteboard: pb), let tiff = img.tiffRepresentation else { return }
         applyArtwork(tiff)
     }
 
     private func applyArtwork(_ data: Data) {
-        isReplacing = true
-        error = nil
-        let p = pid
+        isReplacing = true; error = nil
         Task {
             do {
-                _ = try await appState.writeService.setArtwork(data, for: p)
-                await MainActor.run {
-                    isReplacing = false
-                    if let img = NSImage(data: data) { image = img }
-                }
+                _ = try await appState.writeService.setArtwork(data, for: pid)
+                await MainActor.run { isReplacing = false; if let img = NSImage(data: data) { image = img } }
             } catch {
-                await MainActor.run {
-                    isReplacing = false
-                    self.error = error.localizedDescription
-                }
+                await MainActor.run { isReplacing = false; self.error = error.localizedDescription }
             }
         }
     }

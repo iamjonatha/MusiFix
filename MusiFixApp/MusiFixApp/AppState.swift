@@ -9,6 +9,7 @@ final class AppState: ObservableObject {
     let bridge: any AppleMusicBridge
     let indexService: IndexService
     let writeService: MetadataWriteService
+    let enrichmentService: EnrichmentService
 
     @Published var indexProgress: IndexProgress = .init(
         phase: .idle, processed: 0, total: 0, lastSyncDate: nil
@@ -26,6 +27,7 @@ final class AppState: ObservableObject {
         self.bridge = AppleMusicBridgeFactory.makeBridge()
         self.indexService = IndexService(db: db, bridge: bridge)
         self.writeService = MetadataWriteService(db: db, bridge: bridge)
+        self.enrichmentService = EnrichmentService()
     }
 
     func startFullIndex() {

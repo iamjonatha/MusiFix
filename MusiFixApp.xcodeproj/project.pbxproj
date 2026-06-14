@@ -17,6 +17,7 @@
 		AA000022 /* BatchEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000022 /* BatchEditorView.swift */; };
 		AA000023 /* DiffPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000023 /* DiffPreviewView.swift */; };
 		AA000024 /* OperationLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000024 /* OperationLogView.swift */; };
+		AA000025 /* EnrichmentSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000025 /* EnrichmentSearchView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -32,6 +33,7 @@
 		BB000022 /* BatchEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchEditorView.swift; sourceTree = "<group>"; };
 		BB000023 /* DiffPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPreviewView.swift; sourceTree = "<group>"; };
 		BB000024 /* OperationLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationLogView.swift; sourceTree = "<group>"; };
+		BB000025 /* EnrichmentSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnrichmentSearchView.swift; sourceTree = "<group>"; };
 		CC000001 /* MusiFixApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusiFixApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -77,6 +79,7 @@
 				BB000022 /* BatchEditorView.swift */,
 				BB000023 /* DiffPreviewView.swift */,
 				BB000024 /* OperationLogView.swift */,
+				BB000025 /* EnrichmentSearchView.swift */,
 			);
 			path = Editor;
 			sourceTree = "<group>";
@@ -183,6 +186,7 @@
 				AA000022 /* BatchEditorView.swift in Sources */,
 				AA000023 /* DiffPreviewView.swift in Sources */,
 				AA000024 /* OperationLogView.swift in Sources */,
+				AA000025 /* EnrichmentSearchView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
