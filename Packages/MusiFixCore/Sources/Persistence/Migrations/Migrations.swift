@@ -1,0 +1,149 @@
+import GRDB
+
+/// Tutte le migrazioni dello schema, in ordine.
+/// Aggiungere sempre nuove versioni IN FONDO — mai modificare quelle esistenti.
+public enum Migrations {
+    public static func register(in migrator: inout DatabaseMigrator) {
+        migrator.registerMigration("v1_initial_schema", migrate: v1)
+        migrator.registerMigration("v1_fts5", migrate: v1_fts5)
+    }
+
+    // ── v1: schema principale ─────────────────────────────────────────────────
+    private static func v1(_ db: Database) throws {
+        // Tabella principale brani
+        try db.create(table: "track") { t in
+            t.primaryKey("persistentID", .text)
+            t.column("databaseID", .integer).notNull()
+            t.column("locationPath", .text)
+            t.column("locationMtime", .double)
+            t.column("locationSize", .integer)
+            t.column("contentHash", .text)
+            t.column("isCloudOnly", .boolean).notNull().defaults(to: false)
+            t.column("isEditable", .boolean).notNull().defaults(to: true)
+            t.column("name", .text).notNull().defaults(to: "")
+            t.column("artist", .text).notNull().defaults(to: "")
+            t.column("albumArtist", .text).notNull().defaults(to: "")
+            t.column("album", .text).notNull().defaults(to: "")
+            t.column("year", .integer).notNull().defaults(to: 0)
+            t.column("genre", .text).notNull().defaults(to: "")
+            t.column("comment", .text).notNull().defaults(to: "")
+            t.column("composer", .text).notNull().defaults(to: "")
+            t.column("trackNumber", .integer).notNull().defaults(to: 0)
+            t.column("trackCount", .integer).notNull().defaults(to: 0)
+            t.column("discNumber", .integer).notNull().defaults(to: 0)
+            t.column("discCount", .integer).notNull().defaults(to: 0)
+            t.column("duration", .double).notNull().defaults(to: 0)
+            t.column("bitRate", .integer).notNull().defaults(to: 0)
+            t.column("sampleRate", .double).notNull().defaults(to: 0)
+            t.column("format", .text).notNull().defaults(to: "")
+            t.column("kind", .text).notNull().defaults(to: "")
+            t.column("musicDateAdded", .datetime)
+            t.column("musicModDate", .datetime)
+            t.column("indexedAt", .datetime).notNull()
+            t.column("artistNormalized", .text).notNull().defaults(to: "")
+            t.column("albumNormalized", .text).notNull().defaults(to: "")
+            t.column("genreNormalized", .text).notNull().defaults(to: "")
+        }
+
+        // Indici per i pattern di query più comuni
+        try db.create(index: "track_artist", on: "track", columns: ["artistNormalized"])
+        try db.create(index: "track_album", on: "track", columns: ["albumNormalized"])
+        try db.create(index: "track_genre", on: "track", columns: ["genreNormalized"])
+        try db.create(index: "track_year", on: "track", columns: ["year"])
+        try db.create(index: "track_moddate", on: "track", columns: ["musicModDate"])
+
+        // Alias generi (per normalizzazione Fase 4)
+        try db.create(table: "genre_alias") { t in
+            t.primaryKey("from", .text)
+            t.column("to", .text).notNull()
+        }
+
+        // Alias artisti
+        try db.create(table: "artist_alias") { t in
+            t.primaryKey("from", .text)
+            t.column("to", .text).notNull()
+        }
+
+        // Log operazioni (undo/audit)
+        try db.create(table: "operation_log") { t in
+            t.autoIncrementedPrimaryKey("id")
+            t.column("persistentID", .text).notNull()
+                .references("track", onDelete: .cascade)
+            t.column("field", .text).notNull()
+            t.column("valueBefore", .text)
+            t.column("valueAfter", .text)
+            t.column("performedAt", .datetime).notNull()
+            t.column("status", .text).notNull().defaults(to: "pending")
+            t.column("errorMessage", .text)
+        }
+        try db.create(index: "oplog_pid", on: "operation_log", columns: ["persistentID"])
+        try db.create(index: "oplog_status", on: "operation_log", columns: ["status"])
+
+        // Cache arricchimento online (copertine / anno)
+        try db.create(table: "enrichment_cache") { t in
+            t.primaryKey("cacheKey", .text)
+            t.column("provider", .text).notNull()
+            t.column("artworkURL", .text)
+            t.column("artworkData", .blob)
+            t.column("releaseYear", .integer)
+            t.column("fetchedAt", .datetime).notNull()
+            t.column("score", .double).notNull().defaults(to: 0)
+        }
+
+        // Checkpoint indicizzazione (ripresa dopo crash)
+        try db.create(table: "indexing_checkpoint") { t in
+            t.autoIncrementedPrimaryKey("id")
+            t.column("startedAt", .datetime).notNull()
+            t.column("lastPersistentID", .text)
+            t.column("totalExpected", .integer).notNull().defaults(to: 0)
+            t.column("processed", .integer).notNull().defaults(to: 0)
+            t.column("phase", .text).notNull().defaults(to: "music_fetch")
+            t.column("completedAt", .datetime)
+        }
+
+        // Stato sync FSEvents / ultima sync Music
+        try db.create(table: "sync_state") { t in
+            t.primaryKey("key", .text)
+            t.column("value", .text).notNull()
+            t.column("updatedAt", .datetime).notNull()
+        }
+    }
+
+    // ── v1_fts5: ricerca full-text ─────────────────────────────────────────────
+    private static func v1_fts5(_ db: Database) throws {
+        // Tabella FTS5 virtuale content= per non duplicare dati.
+        try db.create(virtualTable: "track_fts", using: FTS5()) { t in
+            t.content = "track"
+            t.contentRowID = "rowid"
+            t.column("name")
+            t.column("artist")
+            t.column("albumArtist")
+            t.column("album")
+            t.column("genre")
+            t.column("composer")
+            t.tokenizer = .unicode61()
+        }
+
+        // Trigger per mantenere FTS sincronizzato con la tabella track
+        try db.execute(sql: """
+            CREATE TRIGGER track_fts_ai AFTER INSERT ON track BEGIN
+                INSERT INTO track_fts(rowid, name, artist, albumArtist, album, genre, composer)
+                VALUES (new.rowid, new.name, new.artist, new.albumArtist, new.album, new.genre, new.composer);
+            END;
+            """)
+        try db.execute(sql: """
+            CREATE TRIGGER track_fts_ad AFTER DELETE ON track BEGIN
+                INSERT INTO track_fts(track_fts, rowid, name, artist, albumArtist, album, genre, composer)
+                VALUES ('delete', old.rowid, old.name, old.artist, old.albumArtist, old.album, old.genre, old.composer);
+            END;
+            """)
+        try db.execute(sql: """
+            CREATE TRIGGER track_fts_au AFTER UPDATE ON track BEGIN
+                INSERT INTO track_fts(track_fts, rowid, name, artist, albumArtist, album, genre, composer)
+                VALUES ('delete', old.rowid, old.name, old.artist, old.albumArtist, old.album, old.genre, old.composer);
+                INSERT INTO track_fts(rowid, name, artist, albumArtist, album, genre, composer)
+                VALUES (new.rowid, new.name, new.artist, new.albumArtist, new.album, new.genre, new.composer);
+            END;
+            """)
+    }
+}
