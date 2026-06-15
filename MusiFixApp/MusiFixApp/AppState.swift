@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
     let normalizationService: NormalizationService
     let duplicateService: DuplicateService
     let deletionService: DeletionService
+    let divergenceService: DivergenceService
 
     @Published var indexProgress: IndexProgress = .init(
         phase: .idle, processed: 0, total: 0, lastSyncDate: nil
@@ -36,6 +37,7 @@ final class AppState: ObservableObject {
         self.normalizationService = NormalizationService(db: db, writeService: writeService)
         self.duplicateService = DuplicateService(db: db)
         self.deletionService = DeletionService(db: db, bridge: bridge)
+        self.divergenceService = DivergenceService(db: db, bridge: bridge, writeService: writeService)
     }
 
     func startFullIndex() {

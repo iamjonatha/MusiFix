@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var showDuplicates = false
     @State private var showDashboard = false
     @State private var showDeletion = false
+    @State private var showDivergence = false
 
     var selectedTrack: DBTrack? {
         guard browser.selectedPIDs.count == 1 else { return nil }
@@ -26,6 +27,15 @@ struct ContentView: View {
                 Text("MusiFix").font(.headline)
                 Spacer()
                 SyncStatusView(progress: appState.indexProgress, isIndexing: appState.isIndexing)
+
+                if !browser.selectedPIDs.isEmpty {
+                    Button {
+                        showDivergence = true
+                    } label: {
+                        Image(systemName: "arrow.left.arrow.right")
+                    }
+                    .help("Verifica divergenze vs Music.app (\(browser.selectedPIDs.count) selezionati)")
+                }
 
                 if browser.selectedPIDs.count > 1 {
                     Button("Modifica \(browser.selectedPIDs.count) brani…") {
@@ -60,8 +70,10 @@ struct ContentView: View {
 
                 Button("Indicizza tutto") { appState.startFullIndex() }
                     .disabled(appState.isIndexing)
+                    .help("Riscansione completa della libreria Music.app (25k+ brani). Usa solo al primo avvio o se l'indice è corrotto.")
                 Button("Sync") { appState.startIncrementalSync() }
                     .disabled(appState.isIndexing)
+                    .help("Aggiorna l'indice con le sole tracce aggiunte/modificate/rimosse dall'ultima sincronizzazione.")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -191,6 +203,14 @@ struct ContentView: View {
                 appState: appState,
                 onDeleted: { _ in browser.loadInitialPage(db: appState.db) },
                 isPresented: $showDeletion
+            )
+        }
+        .sheet(isPresented: $showDivergence) {
+            DivergenceView(
+                service: appState.divergenceService,
+                pids: Array(browser.selectedPIDs),
+                isPresented: $showDivergence,
+                onApplied: { browser.loadInitialPage(db: appState.db) }
             )
         }
     }

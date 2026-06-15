@@ -22,6 +22,7 @@
 		AA000031 /* DuplicatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000031 /* DuplicatesView.swift */; };
 		AA000032 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000032 /* DashboardView.swift */; };
 		AA000033 /* DeletionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000033 /* DeletionView.swift */; };
+		AA000034 /* DivergenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000034 /* DivergenceView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +43,7 @@
 		BB000031 /* DuplicatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicatesView.swift; sourceTree = "<group>"; };
 		BB000032 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		BB000033 /* DeletionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionView.swift; sourceTree = "<group>"; };
+		BB000034 /* DivergenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DivergenceView.swift; sourceTree = "<group>"; };
 		CC000001 /* MusiFixApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusiFixApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -68,6 +70,7 @@
 				EE000005 /* Duplicates */,
 				EE000006 /* Dashboard */,
 				EE000007 /* Deletion */,
+				EE000008 /* Divergence */,
 				BB000010 /* Info.plist */,
 				BB000011 /* MusiFixApp.entitlements */,
 			);
@@ -126,6 +129,14 @@
 				BB000033 /* DeletionView.swift */,
 			);
 			path = Deletion;
+			sourceTree = "<group>";
+		};
+		EE000008 /* Divergence */ = {
+			isa = PBXGroup;
+			children = (
+				BB000034 /* DivergenceView.swift */,
+			);
+			path = Divergence;
 			sourceTree = "<group>";
 		};
 		EE000000 /* root */ = {
@@ -235,6 +246,7 @@
 				AA000031 /* DuplicatesView.swift in Sources */,
 				AA000032 /* DashboardView.swift in Sources */,
 				AA000033 /* DeletionView.swift in Sources */,
+				AA000034 /* DivergenceView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
