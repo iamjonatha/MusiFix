@@ -189,7 +189,7 @@ public actor IndexService {
     // ── Helpers privati ───────────────────────────────────────────────────────
 
     private func buildDBTrack(from track: Track) async -> DBTrack {
-        var locationPath: String? = track.location?.path
+        let locationPath: String? = track.location?.path
         var mtime: Double? = nil
         var size: Int64? = nil
         var hash: String? = nil

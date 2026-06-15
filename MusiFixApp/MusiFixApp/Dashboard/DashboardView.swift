@@ -9,13 +9,13 @@ struct DashboardView: View {
     let appState: AppState
     @Binding var isPresented: Bool
 
-    // Callback per aprire le altre viste
     var onOpenNormalization: () -> Void = {}
     var onOpenDuplicates: () -> Void = {}
+    /// Applica il filtro al browser e chiude la dashboard.
+    var onFilter: (TrackFilter) -> Void = { _ in }
 
     @State private var stats: LibraryStats = .zero
     @State private var isLoading = true
-    @State private var showBackupPanel = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,22 +42,14 @@ struct DashboardView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 16) {
-                        // ── Riepilogo principale ──────────────────────────────
                         statGrid
-
                         Divider()
-
-                        // ── Problemi da correggere ────────────────────────────
-                        issueSection
-
+                        missingFieldsSection
                         Divider()
-
-                        // ── Breakdown formati ─────────────────────────────────
+                        inconsistenciesSection
+                        Divider()
                         formatSection
-
                         Divider()
-
-                        // ── Backup / manutenzione ─────────────────────────────
                         maintenanceSection
                     }
                     .padding(16)
@@ -77,7 +69,7 @@ struct DashboardView: View {
             }
             .padding(16)
         }
-        .frame(width: 520, height: 580)
+        .frame(width: 520, height: 680)
         .onAppear { Task { await reload() } }
     }
 
@@ -86,36 +78,88 @@ struct DashboardView: View {
     private var statGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
                   spacing: 12) {
-            StatCard(value: stats.totalTracks,  label: "Brani totali",  icon: "music.note",          color: .blue)
-            StatCard(value: stats.cloudOnly,    label: "Solo iCloud",   icon: "icloud",               color: .teal)
-            StatCard(value: stats.deletionCount, label: "Eliminati",    icon: "trash",                color: .gray)
+            StatCard(value: stats.totalTracks,   label: "Brani totali",  icon: "music.note",  color: .blue)
+            StatCard(value: stats.cloudOnly,      label: "Solo iCloud",   icon: "icloud",       color: .teal)
+            StatCard(value: stats.deletionCount,  label: "Eliminati",     icon: "trash",        color: .gray)
         }
     }
 
-    // ── Sezione problemi ──────────────────────────────────────────────────────
+    // ── Sezione campi mancanti ────────────────────────────────────────────────
 
-    private var issueSection: some View {
+    private var missingFieldsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Dati mancanti").font(.subheadline.bold())
+            Text("Campi mancanti").font(.subheadline.bold())
 
-            IssueRow(count: stats.missingYear,   label: "Anno mancante",         icon: "calendar.badge.exclamationmark",   color: .orange) {
-                // l'utente può filtrare nella tabella browser
-                isPresented = false
+            IssueRow(count: stats.missingYear,
+                     label: "Anno mancante",
+                     icon: "calendar.badge.exclamationmark",
+                     color: .orange) {
+                navigate(filter: .missingYear)
             }
-            IssueRow(count: stats.missingArtist, label: "Artista mancante",      icon: "person.badge.minus",              color: .red) {
-                isPresented = false
+            IssueRow(count: stats.missingArtist,
+                     label: "Artista mancante",
+                     icon: "person.badge.minus",
+                     color: .red) {
+                navigate(filter: .missingArtist)
             }
-            IssueRow(count: stats.missingAlbum,  label: "Album mancante",        icon: "opticaldisc",                     color: .red) {
-                isPresented = false
+            IssueRow(count: stats.missingAlbum,
+                     label: "Album mancante",
+                     icon: "opticaldisc",
+                     color: .red) {
+                navigate(filter: .missingAlbum)
             }
-            IssueRow(count: stats.missingGenre,  label: "Genere mancante o non normalizzato", icon: "tag.slash", color: .purple) {
-                isPresented = false
-                onOpenNormalization()
+            IssueRow(count: stats.missingAlbumArtist,
+                     label: "Artista album mancante",
+                     icon: "person.2.badge.minus",
+                     color: .orange) {
+                navigate(filter: .missingAlbumArtist)
+            }
+            IssueRow(count: stats.missingGenre,
+                     label: "Genere mancante",
+                     icon: "tag.slash",
+                     color: .purple) {
+                navigate(filter: .missingGenre)
+            }
+            IssueRow(count: stats.missingTrackNumber,
+                     label: "N. traccia mancante",
+                     icon: "number.circle",
+                     color: .orange) {
+                navigate(filter: .missingTrackNumber)
+            }
+            IssueRow(count: stats.missingDiscNumber,
+                     label: "N. disco mancante",
+                     icon: "opticaldisc.fill",
+                     color: .orange) {
+                navigate(filter: .missingDiscNumber)
             }
             if stats.withoutFile > 0 {
-                IssueRow(count: stats.withoutFile, label: "File non trovato (non iCloud)", icon: "doc.badge.ellipsis", color: .red) {
+                IssueRow(count: stats.withoutFile,
+                         label: "File non trovato (non iCloud)",
+                         icon: "doc.badge.ellipsis",
+                         color: .red) {
                     isPresented = false
                 }
+            }
+        }
+    }
+
+    // ── Sezione inconsistenze ─────────────────────────────────────────────────
+
+    private var inconsistenciesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Inconsistenze").font(.subheadline.bold())
+
+            IssueRow(count: stats.multipleAlbumValues,
+                     label: "Valori multipli per il campo Album",
+                     icon: "exclamationmark.triangle",
+                     color: .yellow) {
+                navigate(filter: .multipleAlbumValues)
+            }
+            IssueRow(count: stats.multipleAlbumArtistValues,
+                     label: "Valori multipli per il campo Artista Album",
+                     icon: "person.2.slash",
+                     color: .yellow) {
+                navigate(filter: .multipleAlbumArtistValues)
             }
         }
     }
@@ -152,14 +196,10 @@ struct DashboardView: View {
             Text("Manutenzione").font(.subheadline.bold())
 
             HStack(spacing: 8) {
-                Button {
-                    exportDatabase()
-                } label: {
+                Button { exportDatabase() } label: {
                     Label("Esporta indice DB…", systemImage: "externaldrive.badge.checkmark")
                 }
-                Button {
-                    exportRules()
-                } label: {
+                Button { exportRules() } label: {
                     Label("Esporta regole…", systemImage: "list.bullet.clipboard")
                 }
             }
@@ -174,6 +214,11 @@ struct DashboardView: View {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private func navigate(filter: TrackFilter) {
+        isPresented = false
+        onFilter(filter)
+    }
 
     private func reload() async {
         isLoading = true
@@ -227,12 +272,12 @@ struct DashboardView: View {
 
     private func formatColor(_ fmt: String) -> Color {
         switch fmt.lowercased() {
-        case "m4a", "aac": return .blue
-        case "mp3":         return .orange
-        case "aiff", "aif": return .green
-        case "wav":         return .teal
-        case "flac", "alac": return .purple
-        default:            return .gray
+        case "m4a", "aac":    return .blue
+        case "mp3":            return .orange
+        case "aiff", "aif":   return .green
+        case "wav":            return .teal
+        case "flac", "alac":  return .purple
+        default:               return .gray
         }
     }
 }
@@ -278,7 +323,7 @@ private struct IssueRow: View {
                     .background(color.opacity(0.15))
                     .foregroundStyle(color)
                     .clipShape(Capsule())
-                Button("Vai") { action() }
+                Button("Vai →") { action() }
                     .font(.caption)
                     .buttonStyle(.borderless)
                     .foregroundStyle(Color.accentColor)

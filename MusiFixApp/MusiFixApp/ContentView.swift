@@ -88,6 +88,33 @@ struct ContentView: View {
 
             Divider()
 
+            // ── Filtro attivo dalla dashboard ─────────────────────────────────
+            if browser.filter != .none {
+                HStack(spacing: 6) {
+                    Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                        .font(.caption)
+                    Text(filterLabel(for: browser.filter))
+                        .font(.caption)
+                    Spacer()
+                    Button {
+                        browser.filter = .none
+                        browser.loadInitialPage(db: appState.db)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .help("Rimuovi filtro")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(Color.accentColor.opacity(0.08))
+
+                Divider()
+            }
+
             // ── Tabella + pannello editor ──────────────────────────────────────
             HSplitView {
                 TrackTableView(viewModel: browser, db: appState.db)
@@ -151,7 +178,11 @@ struct ContentView: View {
                 appState: appState,
                 isPresented: $showDashboard,
                 onOpenNormalization: { showNormalization = true },
-                onOpenDuplicates:    { showDuplicates = true }
+                onOpenDuplicates:    { showDuplicates = true },
+                onFilter: { filter in
+                    browser.filter = filter
+                    browser.loadInitialPage(db: appState.db)
+                }
             )
         }
         .sheet(isPresented: $showDeletion) {
@@ -162,6 +193,27 @@ struct ContentView: View {
                 isPresented: $showDeletion
             )
         }
+    }
+}
+
+private func filterLabel(for filter: TrackFilter) -> String {
+    switch filter {
+    case .none:                    return ""
+    case .missingYear:             return "Anno mancante"
+    case .missingArtist:           return "Artista mancante"
+    case .missingAlbum:            return "Album mancante"
+    case .missingAlbumArtist:      return "Artista album mancante"
+    case .missingGenre:            return "Genere mancante"
+    case .missingTrackNumber:      return "N. traccia mancante"
+    case .missingDiscNumber:       return "N. disco mancante"
+    case .multipleAlbumValues:     return "Valori multipli — Album"
+    case .multipleAlbumArtistValues: return "Valori multipli — Artista Album"
+    case .missingArtwork:          return "Copertina mancante"
+    case .cloudOnly:               return "Solo iCloud"
+    case .genre(let g):            return "Genere: \(g)"
+    case .artist(let a):           return "Artista: \(a)"
+    case .album(let a):            return "Album: \(a)"
+    case .year(let y):             return "Anno: \(y)"
     }
 }
 

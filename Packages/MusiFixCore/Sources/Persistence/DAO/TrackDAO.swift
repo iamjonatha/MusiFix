@@ -123,10 +123,39 @@ public struct TrackDAO: Sendable {
         case .none:
             return request
         case .missingArtwork:
-            // placeholder: in Fase 2 aggiungeremo colonna hasArtwork
-            return request
+            return request  // placeholder: in Fase 2 aggiungeremo colonna hasArtwork
         case .missingYear:
             return request.filter(Column("year") == 0)
+        case .missingArtist:
+            return request.filter(Column("artist") == "")
+        case .missingAlbum:
+            return request.filter(Column("album") == "")
+        case .missingAlbumArtist:
+            return request.filter(Column("albumArtist") == "")
+        case .missingGenre:
+            return request.filter(Column("genre") == "")
+        case .missingTrackNumber:
+            return request.filter(Column("trackNumber") == 0)
+        case .missingDiscNumber:
+            return request.filter(Column("discNumber") == 0)
+        case .multipleAlbumValues:
+            return request.filter(sql: """
+                album != '' AND EXISTS (
+                    SELECT 1 FROM track t2
+                    WHERE t2.artistNormalized = track.artistNormalized
+                      AND t2.albumNormalized  = track.albumNormalized
+                      AND t2.album            != track.album
+                      AND t2.album            != ''
+                )
+                """)
+        case .multipleAlbumArtistValues:
+            return request.filter(sql: """
+                albumNormalized != '' AND EXISTS (
+                    SELECT 1 FROM track t2
+                    WHERE t2.albumNormalized = track.albumNormalized
+                      AND t2.albumArtist    != track.albumArtist
+                )
+                """)
         case .cloudOnly:
             return request.filter(Column("isCloudOnly") == true)
         case .genre(let g):
@@ -168,10 +197,18 @@ public enum TrackSortField: String, Sendable, CaseIterable {
     case name, artist, album, year, genre, duration, dateAdded
 }
 
-public enum TrackFilter: Sendable {
+public enum TrackFilter: Sendable, Equatable {
     case none
-    case missingArtwork
+    case missingArtwork          // placeholder (Fase 2: colonna hasArtwork)
     case missingYear
+    case missingArtist
+    case missingAlbum
+    case missingAlbumArtist
+    case missingGenre
+    case missingTrackNumber
+    case missingDiscNumber
+    case multipleAlbumValues     // album incongruenti nello stesso gruppo artist+album
+    case multipleAlbumArtistValues // albumArtist incongruenti nello stesso album
     case cloudOnly
     case genre(String)
     case artist(String)
