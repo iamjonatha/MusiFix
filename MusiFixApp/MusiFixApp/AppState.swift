@@ -10,6 +10,8 @@ final class AppState: ObservableObject {
     let indexService: IndexService
     let writeService: MetadataWriteService
     let enrichmentService: EnrichmentService
+    let normalizationService: NormalizationService
+    let duplicateService: DuplicateService
 
     @Published var indexProgress: IndexProgress = .init(
         phase: .idle, processed: 0, total: 0, lastSyncDate: nil
@@ -28,6 +30,8 @@ final class AppState: ObservableObject {
         self.indexService = IndexService(db: db, bridge: bridge)
         self.writeService = MetadataWriteService(db: db, bridge: bridge)
         self.enrichmentService = EnrichmentService()
+        self.normalizationService = NormalizationService(db: db, writeService: writeService)
+        self.duplicateService = DuplicateService(db: db)
     }
 
     func startFullIndex() {

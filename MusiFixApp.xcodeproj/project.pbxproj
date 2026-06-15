@@ -18,6 +18,8 @@
 		AA000023 /* DiffPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000023 /* DiffPreviewView.swift */; };
 		AA000024 /* OperationLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000024 /* OperationLogView.swift */; };
 		AA000025 /* EnrichmentSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000025 /* EnrichmentSearchView.swift */; };
+		AA000030 /* NormalizationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000030 /* NormalizationView.swift */; };
+		AA000031 /* DuplicatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000031 /* DuplicatesView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +36,8 @@
 		BB000023 /* DiffPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPreviewView.swift; sourceTree = "<group>"; };
 		BB000024 /* OperationLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationLogView.swift; sourceTree = "<group>"; };
 		BB000025 /* EnrichmentSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnrichmentSearchView.swift; sourceTree = "<group>"; };
+		BB000030 /* NormalizationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizationView.swift; sourceTree = "<group>"; };
+		BB000031 /* DuplicatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicatesView.swift; sourceTree = "<group>"; };
 		CC000001 /* MusiFixApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusiFixApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -56,6 +60,8 @@
 				BB000003 /* AppState.swift */,
 				EE000002 /* Browser */,
 				EE000003 /* Editor */,
+				EE000004 /* Normalization */,
+				EE000005 /* Duplicates */,
 				BB000010 /* Info.plist */,
 				BB000011 /* MusiFixApp.entitlements */,
 			);
@@ -82,6 +88,22 @@
 				BB000025 /* EnrichmentSearchView.swift */,
 			);
 			path = Editor;
+			sourceTree = "<group>";
+		};
+		EE000004 /* Normalization */ = {
+			isa = PBXGroup;
+			children = (
+				BB000030 /* NormalizationView.swift */,
+			);
+			path = Normalization;
+			sourceTree = "<group>";
+		};
+		EE000005 /* Duplicates */ = {
+			isa = PBXGroup;
+			children = (
+				BB000031 /* DuplicatesView.swift */,
+			);
+			path = Duplicates;
 			sourceTree = "<group>";
 		};
 		EE000000 /* root */ = {
@@ -187,6 +209,8 @@
 				AA000023 /* DiffPreviewView.swift in Sources */,
 				AA000024 /* OperationLogView.swift in Sources */,
 				AA000025 /* EnrichmentSearchView.swift in Sources */,
+				AA000030 /* NormalizationView.swift in Sources */,
+				AA000031 /* DuplicatesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

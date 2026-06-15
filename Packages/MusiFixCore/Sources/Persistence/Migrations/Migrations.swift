@@ -7,6 +7,7 @@ public enum Migrations {
         migrator.registerMigration("v1_initial_schema", migrate: v1)
         migrator.registerMigration("v1_fts5", migrate: v1_fts5)
         migrator.registerMigration("v2_operation_batchid", migrate: v2_operation_batchid)
+        migrator.registerMigration("v3_duplicates", migrate: v3_duplicates)
     }
 
     // ── v1: schema principale ─────────────────────────────────────────────────
@@ -116,6 +117,19 @@ public enum Migrations {
             t.add(column: "batchID", .text)
         }
         try db.create(index: "oplog_batchid", on: "operation_log", columns: ["batchID"])
+    }
+
+    // ── v3: fingerprint audio + duplicate_ignore ──────────────────────────────
+    private static func v3_duplicates(_ db: Database) throws {
+        try db.alter(table: "track") { t in
+            t.add(column: "audioFingerprint", .blob)
+        }
+        try db.create(table: "duplicate_ignore") { t in
+            t.primaryKey(["pid1", "pid2"])
+            t.column("pid1", .text).notNull()
+            t.column("pid2", .text).notNull()
+            t.column("ignoredAt", .datetime).notNull()
+        }
     }
 
     // ── v1_fts5: ricerca full-text ─────────────────────────────────────────────

@@ -8,6 +8,8 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var showBatchEditor = false
     @State private var showLog = false
+    @State private var showNormalization = false
+    @State private var showDuplicates = false
 
     var selectedTrack: DBTrack? {
         guard browser.selectedPIDs.count == 1,
@@ -29,6 +31,16 @@ struct ContentView: View {
                         showBatchEditor = true
                     }
                 }
+
+                Button { showNormalization = true } label: {
+                    Image(systemName: "wand.and.stars")
+                }
+                .help("Normalizzazione generi e artisti")
+
+                Button { showDuplicates = true } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .help("Trova duplicati")
 
                 Button { showLog = true } label: {
                     Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
@@ -116,6 +128,12 @@ struct ContentView: View {
                 appState: appState,
                 onUndone: { browser.loadInitialPage(db: appState.db) }
             )
+        }
+        .sheet(isPresented: $showNormalization) {
+            NormalizationView(appState: appState, isPresented: $showNormalization)
+        }
+        .sheet(isPresented: $showDuplicates) {
+            DuplicatesView(appState: appState, isPresented: $showDuplicates)
         }
     }
 }

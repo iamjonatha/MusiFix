@@ -38,10 +38,13 @@ public struct DBTrack: Codable, FetchableRecord, PersistableRecord, Sendable {
     public var musicModDate: Date?         // modificationDate da Music
     public var indexedAt: Date            // quando è stato indicizzato/aggiornato
 
-    // Normalizzati per clustering fuzzy (generati da NormalizationService in Fase 4)
+    // Normalizzati per clustering fuzzy (generati da NormalizationService)
     public var artistNormalized: String
     public var albumNormalized: String
     public var genreNormalized: String
+
+    // Fingerprint audio per dedup contenuto (Fase 4)
+    public var audioFingerprint: Data?
 
     public init(
         persistentID: String,
@@ -104,6 +107,7 @@ public struct DBTrack: Codable, FetchableRecord, PersistableRecord, Sendable {
         self.artistNormalized = artist.lowercased()
         self.albumNormalized = album.lowercased()
         self.genreNormalized = genre.lowercased()
+        self.audioFingerprint = nil
     }
 }
 
@@ -117,6 +121,17 @@ public struct DBArtistAlias: Codable, FetchableRecord, PersistableRecord, Sendab
     public static let databaseTableName = "artist_alias"
     public var from: String
     public var to: String
+}
+
+public struct DBDuplicateIgnore: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "duplicate_ignore"
+    public var pid1: String
+    public var pid2: String
+    public var ignoredAt: Date
+
+    public init(pid1: String, pid2: String, ignoredAt: Date = Date()) {
+        self.pid1 = pid1; self.pid2 = pid2; self.ignoredAt = ignoredAt
+    }
 }
 
 public struct DBOperation: Codable, FetchableRecord, PersistableRecord, Sendable {
