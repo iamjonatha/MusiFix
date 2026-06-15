@@ -73,6 +73,7 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 @property (readonly) NSInteger databaseID;
 @property BOOL cloudStatus;
 - (SBElementArray<MusicArtwork *> *)artworks;
+- (void)delete;
 - (id)get;
 @end
 
@@ -104,4 +105,5 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 - (SBElementArray<MusicSource *> *)sources;
 - (SBElementArray<MusicTrack *> *)tracks;
 - (SBElementArray<MusicLibraryPlaylist *> *)libraryPlaylists;
+- (void)reveal:(SBObject *)item;
 @end

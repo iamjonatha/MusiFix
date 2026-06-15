@@ -18,6 +18,12 @@ public protocol AppleMusicBridge: Sendable {
 
     /// Legge la copertina come PNG. Nil se assente.
     func artwork(persistentID: String) async throws -> Data?
+
+    /// Rimuove il track dalla libreria Music. Il file fisico NON viene toccato.
+    func deleteTrack(persistentID: String) async throws
+
+    /// Seleziona e mostra il track in Music.app (porta Music in primo piano).
+    func revealInMusic(persistentID: String) async throws
 }
 
 /// Seleziona l'implementazione ottimale disponibile a runtime.

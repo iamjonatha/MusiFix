@@ -60,6 +60,12 @@ extern NSString * const MBKeyModDate;     // NSDate
 - (nullable NSData *)artworkDataForPersistentID:(NSString *)pid
                                            error:(NSError **)error;
 
+/// Rimuove il track dalla libreria Music. Il file fisico NON viene toccato.
+- (BOOL)deleteTrackForPersistentID:(NSString *)pid error:(NSError **)error;
+
+/// Seleziona e mostra il track in Music.app (porta Music in primo piano).
+- (BOOL)revealInMusicForPersistentID:(NSString *)pid error:(NSError **)error;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -8,6 +8,7 @@ public enum Migrations {
         migrator.registerMigration("v1_fts5", migrate: v1_fts5)
         migrator.registerMigration("v2_operation_batchid", migrate: v2_operation_batchid)
         migrator.registerMigration("v3_duplicates", migrate: v3_duplicates)
+        migrator.registerMigration("v4_deletion_log", migrate: v4_deletion_log)
     }
 
     // ── v1: schema principale ─────────────────────────────────────────────────
@@ -130,6 +131,25 @@ public enum Migrations {
             t.column("pid2", .text).notNull()
             t.column("ignoredAt", .datetime).notNull()
         }
+    }
+
+    // ── v4: deletion_log (audit eliminazioni) ─────────────────────────────────
+    private static func v4_deletion_log(_ db: Database) throws {
+        try db.create(table: "deletion_log") { t in
+            t.autoIncrementedPrimaryKey("id")
+            t.column("persistentID", .text).notNull()
+            t.column("name", .text).notNull().defaults(to: "")
+            t.column("artist", .text).notNull().defaults(to: "")
+            t.column("album", .text).notNull().defaults(to: "")
+            t.column("locationPath", .text)
+            t.column("scope", .text).notNull()  // "music_only" | "music_and_trash"
+            t.column("deletedAt", .datetime).notNull()
+            t.column("status", .text).notNull() // "done" | "failed"
+            t.column("errorMessage", .text)
+            t.column("batchID", .text)
+        }
+        try db.create(index: "deletion_log_batchid", on: "deletion_log", columns: ["batchID"])
+        try db.create(index: "deletion_log_date", on: "deletion_log", columns: ["deletedAt"])
     }
 
     // ── v1_fts5: ricerca full-text ─────────────────────────────────────────────

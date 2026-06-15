@@ -10,10 +10,11 @@ struct ContentView: View {
     @State private var showLog = false
     @State private var showNormalization = false
     @State private var showDuplicates = false
+    @State private var showDashboard = false
+    @State private var showDeletion = false
 
     var selectedTrack: DBTrack? {
-        guard browser.selectedPIDs.count == 1,
-              let pid = browser.selectedPIDs.first else { return nil }
+        guard browser.selectedPIDs.count == 1 else { return nil }
         return browser.selectedTracks.first
     }
 
@@ -30,7 +31,17 @@ struct ContentView: View {
                     Button("Modifica \(browser.selectedPIDs.count) brani…") {
                         showBatchEditor = true
                     }
+                    Button(role: .destructive) { showDeletion = true } label: {
+                        Image(systemName: "trash")
+                    }
+                    .help("Elimina \(browser.selectedPIDs.count) brani selezionati")
+                    .foregroundStyle(.red)
                 }
+
+                Button { showDashboard = true } label: {
+                    Image(systemName: "chart.bar.doc.horizontal")
+                }
+                .help("Statistiche libreria")
 
                 Button { showNormalization = true } label: {
                     Image(systemName: "wand.and.stars")
@@ -134,6 +145,22 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showDuplicates) {
             DuplicatesView(appState: appState, isPresented: $showDuplicates)
+        }
+        .sheet(isPresented: $showDashboard) {
+            DashboardView(
+                appState: appState,
+                isPresented: $showDashboard,
+                onOpenNormalization: { showNormalization = true },
+                onOpenDuplicates:    { showDuplicates = true }
+            )
+        }
+        .sheet(isPresented: $showDeletion) {
+            DeletionView(
+                tracks: browser.selectedTracks,
+                appState: appState,
+                onDeleted: { _ in browser.loadInitialPage(db: appState.db) },
+                isPresented: $showDeletion
+            )
         }
     }
 }

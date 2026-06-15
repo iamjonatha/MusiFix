@@ -20,6 +20,8 @@
 		AA000025 /* EnrichmentSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000025 /* EnrichmentSearchView.swift */; };
 		AA000030 /* NormalizationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000030 /* NormalizationView.swift */; };
 		AA000031 /* DuplicatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000031 /* DuplicatesView.swift */; };
+		AA000032 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000032 /* DashboardView.swift */; };
+		AA000033 /* DeletionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000033 /* DeletionView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,6 +40,8 @@
 		BB000025 /* EnrichmentSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnrichmentSearchView.swift; sourceTree = "<group>"; };
 		BB000030 /* NormalizationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizationView.swift; sourceTree = "<group>"; };
 		BB000031 /* DuplicatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicatesView.swift; sourceTree = "<group>"; };
+		BB000032 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		BB000033 /* DeletionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionView.swift; sourceTree = "<group>"; };
 		CC000001 /* MusiFixApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusiFixApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -62,6 +66,8 @@
 				EE000003 /* Editor */,
 				EE000004 /* Normalization */,
 				EE000005 /* Duplicates */,
+				EE000006 /* Dashboard */,
+				EE000007 /* Deletion */,
 				BB000010 /* Info.plist */,
 				BB000011 /* MusiFixApp.entitlements */,
 			);
@@ -104,6 +110,22 @@
 				BB000031 /* DuplicatesView.swift */,
 			);
 			path = Duplicates;
+			sourceTree = "<group>";
+		};
+		EE000006 /* Dashboard */ = {
+			isa = PBXGroup;
+			children = (
+				BB000032 /* DashboardView.swift */,
+			);
+			path = Dashboard;
+			sourceTree = "<group>";
+		};
+		EE000007 /* Deletion */ = {
+			isa = PBXGroup;
+			children = (
+				BB000033 /* DeletionView.swift */,
+			);
+			path = Deletion;
 			sourceTree = "<group>";
 		};
 		EE000000 /* root */ = {
@@ -211,6 +233,8 @@
 				AA000025 /* EnrichmentSearchView.swift in Sources */,
 				AA000030 /* NormalizationView.swift in Sources */,
 				AA000031 /* DuplicatesView.swift in Sources */,
+				AA000032 /* DashboardView.swift in Sources */,
+				AA000033 /* DeletionView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

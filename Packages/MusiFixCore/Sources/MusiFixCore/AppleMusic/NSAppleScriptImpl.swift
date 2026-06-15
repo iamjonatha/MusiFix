@@ -228,6 +228,29 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
         return try Data(contentsOf: tmpURL)
     }
 
+    public func deleteTrack(persistentID: String) async throws {
+        let pid = persistentID.appleScriptEscaped()
+        let script = """
+        tell application "Music"
+            set t to (first track of library playlist 1 whose persistent ID is "\(pid)")
+            delete t
+        end tell
+        """
+        _ = try runAppleScript(script)
+    }
+
+    public func revealInMusic(persistentID: String) async throws {
+        let pid = persistentID.appleScriptEscaped()
+        let script = """
+        tell application "Music"
+            set t to (first track of library playlist 1 whose persistent ID is "\(pid)")
+            reveal t
+            activate
+        end tell
+        """
+        _ = try runAppleScript(script)
+    }
+
     // ─── NSAppleScript runner ────────────────────────────────────────────────
 
     @discardableResult

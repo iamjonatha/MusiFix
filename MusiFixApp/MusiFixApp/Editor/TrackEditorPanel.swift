@@ -24,6 +24,7 @@ struct TrackEditorPanel: View {
     @State private var isWriting = false
     @State private var lastError: String? = nil
     @State private var lastSuccess = false
+    @State private var showDeletion = false
 
     var hasChanges: Bool {
         name != track.name || artist != track.artist ||
@@ -106,6 +107,46 @@ struct TrackEditorPanel: View {
 
             Divider()
 
+            // Barra localizza
+            HStack(spacing: 6) {
+                Button {
+                    if let path = track.locationPath {
+                        NSWorkspace.shared.activateFileViewerSelecting(
+                            [URL(fileURLWithPath: path)]
+                        )
+                    }
+                } label: {
+                    Label("Finder", systemImage: "folder")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .disabled(track.locationPath == nil)
+                .help("Mostra nel Finder")
+
+                Button {
+                    Task { try? await appState.bridge.revealInMusic(persistentID: track.persistentID) }
+                } label: {
+                    Label("Music", systemImage: "music.note")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .help("Mostra in Music")
+
+                Spacer()
+
+                Button(role: .destructive) { showDeletion = true } label: {
+                    Image(systemName: "trash").font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.red)
+                .help("Elimina questo brano")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.bar)
+
+            Divider()
+
             // Barra azioni
             HStack {
                 Button("Ripristina") { resetToTrack() }
@@ -123,6 +164,14 @@ struct TrackEditorPanel: View {
         }
         .onAppear { resetToTrack() }
         .onChange(of: track.persistentID) { _, _ in resetToTrack() }
+        .sheet(isPresented: $showDeletion) {
+            DeletionView(
+                tracks: [track],
+                appState: appState,
+                onDeleted: { _ in onWritten() },
+                isPresented: $showDeletion
+            )
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

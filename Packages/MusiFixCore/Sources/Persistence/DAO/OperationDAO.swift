@@ -4,9 +4,8 @@ import Foundation
 public struct OperationDAO: Sendable {
 
     public static func insert(_ op: DBOperation, in db: Database) throws -> Int64 {
-        var op = op
         try op.insert(db)
-        return op.id!
+        return db.lastInsertedRowID
     }
 
     public static func updateStatus(

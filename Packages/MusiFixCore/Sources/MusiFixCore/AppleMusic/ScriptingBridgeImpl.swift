@@ -36,6 +36,14 @@ public final class ScriptingBridgeImpl: AppleMusicBridge, @unchecked Sendable {
     public func artwork(persistentID: String) async throws -> Data? {
         return try bridge.artworkData(forPersistentID: persistentID)
     }
+
+    public func deleteTrack(persistentID: String) async throws {
+        try bridge.deleteTrack(forPersistentID: persistentID)
+    }
+
+    public func revealInMusic(persistentID: String) async throws {
+        try bridge.revealInMusic(forPersistentID: persistentID)
+    }
 }
 
 // ─── Track init from ObjC dict ────────────────────────────────────────────────

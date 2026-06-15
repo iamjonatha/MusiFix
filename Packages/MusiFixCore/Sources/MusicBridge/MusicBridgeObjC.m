@@ -223,4 +223,39 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
     }
 }
 
+// ─── deleteTrack ─────────────────────────────────────────────────────────────
+
+- (BOOL)deleteTrackForPersistentID:(NSString *)pid error:(NSError **)error {
+    @try {
+        MusicTrack *t = [self trackWithPersistentID:pid];
+        if (!t) {
+            if (error) *error = bridgeError(3, [NSString stringWithFormat:@"Track non trovato: %@", pid]);
+            return NO;
+        }
+        [t delete];
+        return YES;
+    } @catch (NSException *ex) {
+        if (error) *error = bridgeError(9, ex.reason ?: @"Eccezione eliminazione track");
+        return NO;
+    }
+}
+
+// ─── revealInMusic ────────────────────────────────────────────────────────────
+
+- (BOOL)revealInMusicForPersistentID:(NSString *)pid error:(NSError **)error {
+    @try {
+        MusicTrack *t = [self trackWithPersistentID:pid];
+        if (!t) {
+            if (error) *error = bridgeError(3, [NSString stringWithFormat:@"Track non trovato: %@", pid]);
+            return NO;
+        }
+        [_app reveal:t];
+        [_app activate];
+        return YES;
+    } @catch (NSException *ex) {
+        if (error) *error = bridgeError(10, ex.reason ?: @"Eccezione reveal in Music");
+        return NO;
+    }
+}
+
 @end

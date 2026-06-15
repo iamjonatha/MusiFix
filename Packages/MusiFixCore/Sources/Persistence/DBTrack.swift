@@ -179,6 +179,41 @@ public struct DBIndexingCheckpoint: Codable, FetchableRecord, PersistableRecord,
     public var completedAt: Date?
 }
 
+/// Audit trail delle eliminazioni (persiste anche dopo che il track è rimosso dall'indice).
+public struct DBDeletionLog: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "deletion_log"
+    public var id: Int64?
+    public var persistentID: String
+    public var name: String
+    public var artist: String
+    public var album: String
+    public var locationPath: String?
+    public var scope: String           // "music_only" | "music_and_trash"
+    public var deletedAt: Date
+    public var status: String          // "done" | "failed"
+    public var errorMessage: String?
+    public var batchID: String?
+
+    public init(
+        id: Int64? = nil,
+        persistentID: String,
+        name: String,
+        artist: String,
+        album: String,
+        locationPath: String?,
+        scope: String,
+        deletedAt: Date = Date(),
+        status: String = "done",
+        errorMessage: String? = nil,
+        batchID: String? = nil
+    ) {
+        self.id = id; self.persistentID = persistentID; self.name = name
+        self.artist = artist; self.album = album; self.locationPath = locationPath
+        self.scope = scope; self.deletedAt = deletedAt; self.status = status
+        self.errorMessage = errorMessage; self.batchID = batchID
+    }
+}
+
 /// Stato sync FSEvents: event ID persistito per delta senza riscansione completa.
 public struct DBSyncState: Codable, FetchableRecord, PersistableRecord, Sendable {
     public static let databaseTableName = "sync_state"
