@@ -19,6 +19,12 @@ public struct ArtworkCandidate: Sendable, Identifiable {
         self.collectionName = collectionName; self.artistName = artistName
         self.score = score
     }
+
+    public func withScore(_ s: Double) -> ArtworkCandidate {
+        ArtworkCandidate(previewURL: previewURL, fullURL: fullURL, year: year,
+                         provider: provider, collectionName: collectionName,
+                         artistName: artistName, score: s)
+    }
 }
 
 // ── Jaccard similarity su token ───────────────────────────────────────────────

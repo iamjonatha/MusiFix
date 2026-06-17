@@ -13,6 +13,8 @@ struct ArtworkEditorView: View {
     @State private var isReplacing = false
     @State private var error: String? = nil
     @State private var showEnrichment = false
+    @State private var zoom = false
+    @State private var loadTask: Task<Void, Never>? = nil
 
     var pid: String { track.persistentID }
 
@@ -30,6 +32,11 @@ struct ArtworkEditorView: View {
                         .resizable().scaledToFill()
                         .frame(width: 100, height: 100)
                         .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .onTapGesture { zoom = true }
+                        .help("Clic per ingrandire")
+                        .popover(isPresented: $zoom, arrowEdge: .trailing) {
+                            ArtworkZoomPopover(image: image)
+                        }
                 } else {
                     Image(systemName: "music.note")
                         .font(.system(size: 32))
@@ -76,10 +83,12 @@ struct ArtworkEditorView: View {
     }
 
     private func loadArtwork() {
+        loadTask?.cancel()
         isLoading = true; image = nil; error = nil
         let bridge = appState.bridge; let p = pid
-        Task {
+        loadTask = Task {
             let data = try? await bridge.artwork(persistentID: p)
+            guard !Task.isCancelled else { return }
             await MainActor.run { isLoading = false; if let d = data { image = NSImage(data: d) } }
         }
     }

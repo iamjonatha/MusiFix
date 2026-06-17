@@ -6,43 +6,87 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
 
     public init() {}
 
+    // NOTA: trackRowAppleScript non è più usato per il fetch bulk a blocchi.
+    // tracksChunk usa fetch di lista (property of every item) → 17 Apple Events
+    // per chunk invece di 17.000. Mantenuto solo per allTracks() legacy.
+
     // ─── allTracks ──────────────────────────────────────────────────────────
 
     public func allTracks() async throws -> [Track] {
-        // Legge tutte le proprietà in blocchi separati (un Apple Event per proprietà)
-        // per evitare la lentezza dei record AppleScript e i problemi di escape.
-        // Usiamo "tab" e "return" che sono costanti AppleScript native.
+        // Delega a tracksChunk in blocchi di 1000 per coerenza
+        let total = try await trackCount()
+        var result: [Track] = []
+        result.reserveCapacity(total)
+        var start = 1
+        while start <= total {
+            let end = min(start + 999, total)
+            result.append(contentsOf: try await tracksChunk(from: start, to: end))
+            start = end + 1
+        }
+        return result
+    }
+
+    // ─── trackCount / tracksChunk (fetch bulk a blocchi) ───────────────────
+
+    /// Conta i brani in libreria con un singolo Apple Event leggero.
+    /// Usato da `IndexService` per dimensionare il fetch a blocchi e mostrare
+    /// un progresso reale prima ancora di leggere le proprietà dei brani.
+    public func trackCount() async throws -> Int {
+        let script = """
+        tell application "Music"
+            return (count of every track of library playlist 1)
+        end tell
+        """
+        let raw = try runAppleScript(script)
+        return Int(raw) ?? 0
+    }
+
+    /// Recupera un blocco di brani per indice 1-based inclusivo, in un solo
+    /// Apple Event (tab-delimited). Usa `tracks X thru Y of library playlist 1`
+    /// (Fase 0, finding F0.2) — non `items X thru Y of every track`.
+    ///
+    /// Fetchare a blocchi (invece che l'intera libreria in una volta, o un
+    /// Apple Event per proprietà come fa ScriptingBridge) serve a:
+    /// - dare un progresso reale tra un blocco e il successivo;
+    /// - permettere la cancellazione cooperativa tra un blocco e il successivo;
+    /// - isolare un eventuale alias/percorso irrisolvibile (es. volume esterno
+    ///   scollegato) al `try ... end try` del singolo brano, senza dover
+    ///   attendere o ripetere l'intera libreria.
+    public func tracksChunk(from start: Int, to end: Int) async throws -> [Track] {
+        // Fetch di lista: ogni `property of every item of theTracks` è UN solo
+        // Apple Event che restituisce tutti i valori → 17 eventi per chunk
+        // invece di 17.000 (17 proprietà × 1000 track). Speedup ~1000×.
+        // Ogni `property of every item of theTracks` è UN Apple Event → 17 eventi
+        // per chunk vs 17.000 del vecchio repeat-per-track. Il repeat finale opera
+        // su liste locali (già scaricate), nessun Apple Event aggiuntivo.
+        // I valori "missing value" vengono coercizzati ad "" in Swift dal parser.
+        // `property of (tracks X thru Y of lib)` → UN solo Apple Event per proprietà.
+        // NON usare `every item of rangeRef`: crea specifier list invece di liste dati.
         let script = """
         tell application "Music"
             set lib to library playlist 1
+            set pids  to persistent ID of (tracks \(start) thru \(end) of lib)
+            set dbids to database ID of (tracks \(start) thru \(end) of lib)
+            set nms   to name of (tracks \(start) thru \(end) of lib)
+            set arts  to artist of (tracks \(start) thru \(end) of lib)
+            set aarts to album artist of (tracks \(start) thru \(end) of lib)
+            set albs  to album of (tracks \(start) thru \(end) of lib)
+            set yrs   to year of (tracks \(start) thru \(end) of lib)
+            set gens  to genre of (tracks \(start) thru \(end) of lib)
+            set coms  to comment of (tracks \(start) thru \(end) of lib)
+            set comps to composer of (tracks \(start) thru \(end) of lib)
+            set tnums to track number of (tracks \(start) thru \(end) of lib)
+            set tcnts to track count of (tracks \(start) thru \(end) of lib)
+            set dnums to disc number of (tracks \(start) thru \(end) of lib)
+            set dcnts to disc count of (tracks \(start) thru \(end) of lib)
+            set durs  to duration of (tracks \(start) thru \(end) of lib)
+            set brs   to bit rate of (tracks \(start) thru \(end) of lib)
+            set srs   to sample rate of (tracks \(start) thru \(end) of lib)
+            set knds  to kind of (tracks \(start) thru \(end) of lib)
             set output to ""
-            set theTracks to every track of lib
-            repeat with t in theTracks
-                set tLoc to ""
-                try
-                    set locAlias to location of t
-                    if locAlias is not missing value then
-                        set tLoc to (POSIX path of locAlias) as string
-                    end if
-                end try
-                set row to (persistent ID of t) & tab & (database ID of t)
-                set row to row & tab & tLoc
-                set row to row & tab & (name of t)
-                set row to row & tab & (artist of t)
-                set row to row & tab & (album artist of t)
-                set row to row & tab & (album of t)
-                set row to row & tab & (year of t)
-                set row to row & tab & (genre of t)
-                set row to row & tab & (comment of t)
-                set row to row & tab & (composer of t)
-                set row to row & tab & (track number of t)
-                set row to row & tab & (track count of t)
-                set row to row & tab & (disc number of t)
-                set row to row & tab & (disc count of t)
-                set row to row & tab & (duration of t)
-                set row to row & tab & (bit rate of t)
-                set row to row & tab & (sample rate of t)
-                set row to row & tab & (kind of t)
+            set n to count of pids
+            repeat with i from 1 to n
+                set row to (item i of pids) as string & tab & (item i of dbids) as string & tab & (item i of nms) as string & tab & (item i of arts) as string & tab & (item i of aarts) as string & tab & (item i of albs) as string & tab & (item i of yrs) as string & tab & (item i of gens) as string & tab & (item i of coms) as string & tab & (item i of comps) as string & tab & (item i of tnums) as string & tab & (item i of tcnts) as string & tab & (item i of dnums) as string & tab & (item i of dcnts) as string & tab & (item i of durs) as string & tab & (item i of brs) as string & tab & (item i of srs) as string & tab & (item i of knds) as string
                 set output to output & row & return
             end repeat
         end tell
@@ -52,38 +96,42 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
         return parseTabDelimitedTracks(raw)
     }
 
-    // Parser: AppleScript usa `return` (CR, \r) come separatore di riga
-    // e `tab` (\t) come separatore di campo. I numeri decimali usano il
-    // separatore del locale sistema (virgola in italiano) — normalizziamo.
+    // Parser per il fetch bulk (senza location). "missing value" viene emesso da
+    // AppleScript quando un campo non ha valore — trattiamo come "" o 0.
     private func parseTabDelimitedTracks(_ raw: String) -> [Track] {
         raw.components(separatedBy: "\r")
             .filter { !$0.isEmpty }
             .compactMap { line in
                 let parts = line.components(separatedBy: "\t")
-                guard parts.count >= 19 else { return nil }
+                guard parts.count >= 18 else { return nil }
+                let pid = parts[0]
+                guard !pid.isEmpty, pid != "missing value" else { return nil }
                 return Track(
-                    persistentID: parts[0],
+                    persistentID: pid,
                     databaseID: Int(parts[1]) ?? 0,
-                    location: parts[2].isEmpty ? nil : URL(fileURLWithPath: parts[2]),
-                    name: parts[3],
-                    artist: parts[4],
-                    albumArtist: parts[5],
-                    album: parts[6],
-                    year: Int(parts[7]) ?? 0,
-                    genre: parts[8],
-                    comment: parts[9],
-                    composer: parts[10],
-                    trackNumber: Int(parts[11]) ?? 0,
-                    trackCount: Int(parts[12]) ?? 0,
-                    discNumber: Int(parts[13]) ?? 0,
-                    discCount: Int(parts[14]) ?? 0,
-                    duration: parseLocaleDouble(parts[15]),
-                    bitRate: Int(parts[16]) ?? 0,
-                    sampleRate: parseLocaleDouble(parts[17]),
-                    kind: parts[18]
+                    location: nil,
+                    name: mv(parts[2]),
+                    artist: mv(parts[3]),
+                    albumArtist: mv(parts[4]),
+                    album: mv(parts[5]),
+                    year: Int(mv(parts[6])) ?? 0,
+                    genre: mv(parts[7]),
+                    comment: mv(parts[8]),
+                    composer: mv(parts[9]),
+                    trackNumber: Int(mv(parts[10])) ?? 0,
+                    trackCount: Int(mv(parts[11])) ?? 0,
+                    discNumber: Int(mv(parts[12])) ?? 0,
+                    discCount: Int(mv(parts[13])) ?? 0,
+                    duration: parseLocaleDouble(mv(parts[14])),
+                    bitRate: Int(mv(parts[15])) ?? 0,
+                    sampleRate: parseLocaleDouble(mv(parts[16])),
+                    kind: mv(parts[17])
                 )
             }
     }
+
+    /// Converte "missing value" (stringa emessa da AppleScript) in stringa vuota.
+    private func mv(_ s: String) -> String { s == "missing value" ? "" : s }
 
     // ─── trackMetadata ──────────────────────────────────────────────────────
 
@@ -94,10 +142,12 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
             set t to (first track of library playlist 1 whose persistent ID is "\(pid)")
             set tLoc to ""
             try
-                set locAlias to location of t
-                if locAlias is not missing value then
-                    set tLoc to (POSIX path of locAlias) as string
-                end if
+                with timeout of 2 seconds
+                    set locAlias to location of t
+                    if locAlias is not missing value then
+                        set tLoc to (POSIX path of locAlias) as string
+                    end if
+                end timeout
             end try
             set row to (persistent ID of t) & tab & (database ID of t)
             set row to row & tab & tLoc

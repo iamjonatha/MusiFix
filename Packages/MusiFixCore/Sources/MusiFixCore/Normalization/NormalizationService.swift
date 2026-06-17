@@ -162,7 +162,7 @@ public actor NormalizationService {
         let pairs: [(genre: String, pid: String)] = try db.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT genre, persistentID
-                FROM track WHERE genre != ''
+                FROM track WHERE genre != '' AND TRIM(genre) != ''
                 ORDER BY genre
                 """)
             .map { row -> (String, String) in (row["genre"], row["persistentID"]) }
@@ -174,7 +174,7 @@ public actor NormalizationService {
         var previews: [NormalizationPreview] = []
         for (genre, pids) in byGenre {
             let normalized = applyRules(to: genre, aliases: aliases)
-            guard normalized != genre else { continue }
+            guard normalized != genre, !normalized.isEmpty else { continue }
             previews.append(NormalizationPreview(
                 field: .genre,
                 originalValue: genre,
@@ -193,7 +193,7 @@ public actor NormalizationService {
         let pairs: [(artist: String, pid: String)] = try db.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT artist, persistentID
-                FROM track WHERE artist != ''
+                FROM track WHERE artist != '' AND TRIM(artist) != ''
                 ORDER BY artist
                 """)
             .map { row -> (String, String) in (row["artist"], row["persistentID"]) }
@@ -205,7 +205,7 @@ public actor NormalizationService {
         var previews: [NormalizationPreview] = []
         for (artist, pids) in byArtist {
             let normalized = applyArtistRules(to: artist, aliases: aliases)
-            guard normalized != artist else { continue }
+            guard normalized != artist, !normalized.isEmpty else { continue }
             previews.append(NormalizationPreview(
                 field: .artist,
                 originalValue: artist,

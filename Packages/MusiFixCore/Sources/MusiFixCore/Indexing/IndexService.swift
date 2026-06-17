@@ -24,6 +24,7 @@ public struct IndexProgress: Sendable {
         case idle
         case fetchingFromMusic
         case enrichingFiles(completed: Int, total: Int)
+        case resolvingLocations(resolved: Int, total: Int)
         case rebuildingFTS
         case done
         case failed(String)
@@ -35,7 +36,18 @@ public struct IndexProgress: Sendable {
 public actor IndexService {
 
     private let db: AppDatabase
+    // Non più usato per il fetch bulk (vedi bulkFetcher sotto); mantenuto per
+    // coerenza dell'API pubblica e per eventuali letture/scritture puntuali
+    // future (refresh di un singolo track, ecc.).
     private let bridge: any AppleMusicBridge
+    // Fetch bulk sempre via AppleScript, indipendentemente dal bridge attivo:
+    // ScriptingBridge fa un Apple Event per proprietà per ogni track (~20 ×
+    // 25k brani = 500k+ eventi), e la risoluzione di `location` su un volume
+    // esterno può incappare in lookup di catalogo lenti/falliti (vedi
+    // FileIDTreeGetAndLockVolumeEntryFromIndex / -35 in Console). Lo script
+    // AppleScript a blocchi fa un solo Apple Event per blocco e isola gli
+    // alias irrisolvibili nel `try` per-track (vedi NSAppleScriptImpl).
+    private let bulkFetcher = NSAppleScriptImpl()
     private var progressContinuation: AsyncStream<IndexProgress>.Continuation?
 
     public private(set) var progress: IndexProgress = .init(
@@ -62,61 +74,88 @@ public actor IndexService {
         log.info("Avvio indicizzazione completa")
         setProgress(.init(phase: .fetchingFromMusic, processed: 0, total: 0, lastSyncDate: nil))
 
-        // 1. Recupera tutti i track da Music.app
-        let musicTracks = try await bridge.allTracks()
-        log.info("Music.app: \(musicTracks.count) brani")
-        setProgress(.init(phase: .fetchingFromMusic, processed: 0, total: musicTracks.count, lastSyncDate: nil))
+        // 1. Conta i brani
+        log.info("[trace] Inizio trackCount()")
+        let t0 = Date()
+        let total = try await bulkFetcher.trackCount()
+        log.info("[trace] trackCount() completato in \(Date().timeIntervalSince(t0), privacy: .public)s → \(total) brani")
+        setProgress(.init(phase: .fetchingFromMusic, processed: 0, total: total, lastSyncDate: nil))
 
         // 2. Leggi checkpoint per eventuale ripresa
         let resumeFrom = try loadCheckpointPID()
+        log.info("[trace] Checkpoint: \(resumeFrom ?? "nessuno", privacy: .public)")
         var skipUntilPID = resumeFrom
         var processed = 0
 
-        // 3. Converti + salva a batch (evita transazioni enormi)
+        let chunkSize = 1000
         let batchSize = 500
         var batch: [DBTrack] = []
         batch.reserveCapacity(batchSize)
 
-        for track in musicTracks {
-            // Ripresa: salta i brani già processati
-            if let skip = skipUntilPID {
-                if track.persistentID != skip { continue }
-                skipUntilPID = nil  // trovato il checkpoint, riprendi da qui
+        var chunkStart = 1
+        while chunkStart <= total {
+            try Task.checkCancellation()
+
+            let chunkEnd = min(chunkStart + chunkSize - 1, total)
+            log.info("[trace] tracksChunk(\(chunkStart)-\(chunkEnd)) avvio")
+            let tc0 = Date()
+            let chunk = try await bulkFetcher.tracksChunk(from: chunkStart, to: chunkEnd)
+            let elapsed = Date().timeIntervalSince(tc0)
+            log.info("[trace] tracksChunk(\(chunkStart)-\(chunkEnd)) → \(chunk.count) track in \(String(format: "%.1f", elapsed))s")
+            chunkStart = chunkEnd + 1
+
+            if chunk.isEmpty {
+                log.warning("[trace] Chunk vuoto! Script AppleScript restituisce stringa vuota o parsing fallito.")
             }
 
-            let dbTrack = await buildDBTrack(from: track)
-            batch.append(dbTrack)
-            processed += 1
+            for track in chunk {
+                if let skip = skipUntilPID {
+                    if track.persistentID != skip { continue }
+                    skipUntilPID = nil
+                }
 
-            if batch.count >= batchSize {
-                try saveAndCheckpoint(batch: batch, lastPID: batch.last!.persistentID,
-                                      processed: processed, total: musicTracks.count)
-                batch.removeAll(keepingCapacity: true)
-                setProgress(.init(
-                    phase: .enrichingFiles(completed: processed, total: musicTracks.count),
-                    processed: processed, total: musicTracks.count, lastSyncDate: nil
-                ))
+                try Task.checkCancellation()
+                let dbTrack = await buildDBTrack(from: track)
+                batch.append(dbTrack)
+                processed += 1
+
+                if batch.count >= batchSize {
+                    log.info("[trace] Salvataggio batch \(processed - batchSize + 1)-\(processed)")
+                    try saveAndCheckpoint(batch: batch, lastPID: batch.last!.persistentID,
+                                          processed: processed, total: total)
+                    batch.removeAll(keepingCapacity: true)
+                }
             }
+
+            setProgress(.init(
+                phase: .enrichingFiles(completed: processed, total: total),
+                processed: processed, total: total, lastSyncDate: nil
+            ))
         }
 
         // Ultimo batch
         if !batch.isEmpty {
             try saveAndCheckpoint(batch: batch, lastPID: batch.last!.persistentID,
-                                  processed: processed, total: musicTracks.count)
+                                  processed: processed, total: total)
         }
 
-        // 4. FTS rebuild (se necessario dopo upsert massivo senza trigger)
+        // 4. Risolvi path via filesystem scan (evita la risoluzione alias HFS+ lenta)
+        if let mediaFolder = Self.musicMediaFolderURL() {
+            try await resolveLocations(mediaFolder: mediaFolder, total: processed)
+        }
+
+        // 5. FTS rebuild (se necessario dopo upsert massivo senza trigger)
         try rebuildFTSIfNeeded()
 
-        // 5. Marca sync completata
+        // 6. Marca sync completata
         try db.write { db in
             try SyncStateDAO.setLastMusicSync(Date(), in: db)
             try db.execute(sql: "DELETE FROM indexing_checkpoint")
         }
 
         let syncDate = Date()
-        log.info("Indicizzazione completa: \(processed) brani in \(String(format: "%.1f", 0.0))s")
-        setProgress(.init(phase: .done, processed: processed, total: musicTracks.count, lastSyncDate: syncDate))
+        log.info("Indicizzazione completa: \(processed) brani")
+        setProgress(.init(phase: .done, processed: processed, total: total, lastSyncDate: syncDate))
     }
 
     // ── Sync incrementale (F1.3) ──────────────────────────────────────────────
@@ -131,8 +170,23 @@ public actor IndexService {
             try TrackDAO.fetchModDates(in: db)
         }
 
-        // Tutti i track da Music (solo proprietà leggere, poi filtriamo)
-        let musicTracks = try await bridge.allTracks()
+        // Tutti i track da Music, a blocchi (vedi nota su bulkFetcher in
+        // runFullIndex: evita 20+ Apple Event per track via ScriptingBridge
+        // e dà progresso/cancellazione reali tra un blocco e il successivo).
+        let total = try await bulkFetcher.trackCount()
+        setProgress(.init(phase: .fetchingFromMusic, processed: 0, total: total, lastSyncDate: nil))
+
+        var musicTracks: [Track] = []
+        musicTracks.reserveCapacity(total)
+        let chunkSize = 1000
+        var chunkStart = 1
+        while chunkStart <= total {
+            try Task.checkCancellation()
+            let chunkEnd = min(chunkStart + chunkSize - 1, total)
+            musicTracks.append(contentsOf: try await bulkFetcher.tracksChunk(from: chunkStart, to: chunkEnd))
+            chunkStart = chunkEnd + 1
+            setProgress(.init(phase: .fetchingFromMusic, processed: musicTracks.count, total: total, lastSyncDate: nil))
+        }
 
         var updated = 0
         var added = 0
@@ -143,6 +197,7 @@ public actor IndexService {
         let musicPIDs = Set(musicTracks.map { $0.persistentID })
 
         for track in musicTracks {
+            try Task.checkCancellation()
             let knownModDate = knownModDates[track.persistentID]
             if knownModDate == nil {
                 // Nuovo
@@ -186,6 +241,154 @@ public actor IndexService {
         ))
     }
 
+    // ── Risoluzione path via filesystem (evita alias HFS+) ────────────────────
+
+    /// Legge la cartella media di Music.app dalle preferenze utente.
+    /// La chiave `media-folder-url` contiene il file:// URL impostato in
+    /// Music → Preferenze → File → "Posizione cartella iTunes Media".
+    static func musicMediaFolderURL() -> URL? {
+        guard let raw = UserDefaults(suiteName: "com.apple.Music")?
+                .string(forKey: "media-folder-url"),
+              let url = URL(string: raw) else { return nil }
+        // La cartella media di Music.app è [mediaRoot]/Music/
+        return url.appendingPathComponent("Music", isDirectory: true)
+    }
+
+    /// Popola `locationPath`, `locationMtime`, `locationSize`, `contentHash` e
+    /// `format` per i brani locali scansionando il filesystem della cartella media.
+    /// Evita la risoluzione degli alias HFS+ via AppleScript che può bloccarsi su
+    /// volumi con catalogo inconsistente (FileIDTreeGetAndLockVolumeEntryFromIndex -35).
+    ///
+    /// L'algoritmo costruisce un indice `(artist_folder, album_folder, trackNum) → path`
+    /// dalla struttura di cartelle di Music.app (`Artist/Album/NN Title.ext`).
+    func resolveLocations(mediaFolder: URL, total: Int) async throws {
+        log.info("Risoluzione path via filesystem: \(mediaFolder.path)")
+        setProgress(.init(phase: .resolvingLocations(resolved: 0, total: total),
+                          processed: 0, total: total, lastSyncDate: nil))
+
+        let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "flac", "aiff", "aif", "wav", "alac", "ogg", "opus", "wma"]
+
+        // Scansione filesystem in Task.detached: DirectoryEnumerator non è Sendable
+        // in contesti async. Costruisce indice (artist_folder, album_folder, trackNum) → path.
+        let mediaFolderPath = mediaFolder.path
+        let fileIndex: [String: String] = await Task.detached(priority: .userInitiated) {
+            var idx: [String: String] = [:]
+            guard let enumerator = FileManager.default.enumerator(
+                at: URL(fileURLWithPath: mediaFolderPath),
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else { return idx }
+            while let fileURL = enumerator.nextObject() as? URL {
+                let ext = fileURL.pathExtension.lowercased()
+                guard audioExtensions.contains(ext) else { continue }
+                guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+                let filename = fileURL.deletingPathExtension().lastPathComponent
+                let trackNum = IndexService.parseLeadingTrackNumber(from: filename)
+                let albumFolder = fileURL.deletingLastPathComponent().lastPathComponent
+                let artistFolder = fileURL.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
+                let key = IndexService.locationKey(artist: artistFolder, album: albumFolder, trackNum: trackNum)
+                if idx[key] == nil { idx[key] = fileURL.path }
+            }
+            return idx
+        }.value
+        log.info("File audio trovati nell'indice: \(fileIndex.count)")
+
+        // Carica dal DB i brani senza path (tutti locali dopo il fetch senza alias)
+        struct TrackRow: Sendable {
+            let pid: String; let artist: String; let albumArtist: String
+            let album: String; let trackNum: Int
+        }
+        let tracksToResolve: [TrackRow] = try db.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT persistentID, artist, albumArtist, album, trackNumber
+                FROM track WHERE locationPath IS NULL AND isCloudOnly = 0
+                """)
+                .map { TrackRow(pid: $0["persistentID"] ?? "",
+                                artist: $0["artist"] ?? "",
+                                albumArtist: $0["albumArtist"] ?? "",
+                                album: $0["album"] ?? "",
+                                trackNum: $0["trackNumber"] ?? 0) }
+        }
+
+        var updates: [(pid: String, path: String)] = []
+        for t in tracksToResolve {
+            // Music.app usa albumArtist come cartella artista per le compilation
+            let folderArtist = t.albumArtist.isEmpty ? t.artist : t.albumArtist
+            if let path = fileIndex[Self.locationKey(artist: folderArtist, album: t.album, trackNum: t.trackNum)] {
+                updates.append((t.pid, path)); continue
+            }
+            if let path = fileIndex[Self.locationKey(artist: t.artist, album: t.album, trackNum: t.trackNum)] {
+                updates.append((t.pid, path))
+            }
+        }
+        log.info("Path risolti via filesystem: \(updates.count)/\(tracksToResolve.count)")
+
+        // Brani che non hanno trovato un file locale → sono cloud-only
+        let resolvedPIDs = Set(updates.map(\.pid))
+        let unresolvedPIDs = tracksToResolve.map(\.pid).filter { !resolvedPIDs.contains($0) }
+        if !unresolvedPIDs.isEmpty {
+            let placeholders = unresolvedPIDs.map { _ in "?" }.joined(separator: ",")
+            let args = StatementArguments(unresolvedPIDs.map { DatabaseValue(value: $0) })
+            try db.write { db in
+                try db.execute(
+                    sql: "UPDATE track SET isCloudOnly=1, isEditable=0 WHERE persistentID IN (\(placeholders))",
+                    arguments: args
+                )
+            }
+            log.info("Brani marcati cloud-only (file non trovato): \(unresolvedPIDs.count)")
+        }
+
+        let updatesSnapshot = updates
+        try db.write { db in
+            for (pid, path) in updatesSnapshot {
+                let ext = (path as NSString).pathExtension.lowercased()
+                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+                let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970
+                let size = (attrs?[.size] as? Int64) ?? (attrs?[.size] as? NSNumber)?.int64Value
+                try db.execute(
+                    sql: """
+                        UPDATE track SET locationPath=?, format=?, locationMtime=?,
+                        locationSize=?, isCloudOnly=0, isEditable=1 WHERE persistentID=?
+                        """,
+                    arguments: [path, ext, mtime, size, pid]
+                )
+            }
+        }
+
+        // Hash parziale in background, non blocca il completamento dell'indice
+        Task.detached(priority: .utility) { [updates] in
+            for (pid, path) in updates {
+                guard let hash = await self.computePartialHash(path: path) else { continue }
+                try? self.db.write { db in
+                    try db.execute(sql: "UPDATE track SET contentHash=? WHERE persistentID=?",
+                                   arguments: [hash, pid])
+                }
+            }
+        }
+
+        setProgress(.init(phase: .resolvingLocations(resolved: updates.count, total: tracksToResolve.count),
+                          processed: updates.count, total: tracksToResolve.count, lastSyncDate: nil))
+    }
+
+    /// Estrae il numero di traccia dal prefisso numerico del nome file.
+    /// Es.: "01 One More Time" → 1, "12 Harder Better" → 12, "Intro" → 0
+    private static func parseLeadingTrackNumber(from filename: String) -> Int {
+        var digits = ""
+        for ch in filename {
+            if ch.isNumber { digits.append(ch) }
+            else if ch == " " || ch == "-" || ch == "_" || ch == "." { break }
+            else { break }
+        }
+        return Int(digits) ?? 0
+    }
+
+    /// Chiave normalizzata per l'indice filesystem: lowercase + trim degli spazi.
+    private static func locationKey(artist: String, album: String, trackNum: Int) -> String {
+        let a = artist.lowercased().trimmingCharacters(in: .whitespaces)
+        let b = album.lowercased().trimmingCharacters(in: .whitespaces)
+        return "\(a)\t\(b)\t\(trackNum)"
+    }
+
     // ── Helpers privati ───────────────────────────────────────────────────────
 
     private func buildDBTrack(from track: Track) async -> DBTrack {
@@ -194,7 +397,18 @@ public actor IndexService {
         var size: Int64? = nil
         var hash: String? = nil
         var format = ""
-        let isCloudOnly = locationPath == nil
+
+        // Se il location non è disponibile dal fetch (non richiesto nel bulk per
+        // evitare la risoluzione alias HFS+ lenta), stima isCloudOnly dallo stato
+        // iCloud reale (cloudStatus): le tracce ospitate in iCloud
+        // (abbinate/caricate/acquistate/abbonamento) sono cloud; le altre sono
+        // locali e avranno il path popolato da resolveLocations().
+        let isCloudOnly: Bool
+        if track.location != nil {
+            isCloudOnly = false
+        } else {
+            isCloudOnly = CloudStatus(code: track.cloudStatus).isCloudHosted
+        }
 
         // Arricchimento file locale (F1.2): mtime, size, format, hash parziale
         if let path = locationPath {
@@ -232,6 +446,7 @@ public actor IndexService {
             sampleRate: track.sampleRate,
             format: format,
             kind: track.kind,
+            cloudStatus: track.cloudStatus,
             musicDateAdded: track.dateAdded,
             musicModDate: track.modificationDate,
             indexedAt: Date()

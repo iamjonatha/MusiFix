@@ -13,7 +13,7 @@ public enum FuzzyMatch {
         guard la > 0, lb > 0 else { return la == lb ? 1.0 : 0.0 }
         if a == b { return 1.0 }
 
-        let matchWindow = max(la, lb) / 2 - 1
+        let matchWindow = max(0, max(la, lb) / 2 - 1)
         var matchedA = [Bool](repeating: false, count: la)
         var matchedB = [Bool](repeating: false, count: lb)
         var matches = 0
@@ -21,6 +21,7 @@ public enum FuzzyMatch {
         for i in 0..<la {
             let lo = max(0, i - matchWindow)
             let hi = min(i + matchWindow + 1, lb)
+            guard lo < hi else { continue }
             for j in lo..<hi where !matchedB[j] && a[i] == b[j] {
                 matchedA[i] = true; matchedB[j] = true; matches += 1; break
             }

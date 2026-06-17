@@ -90,15 +90,40 @@ Le immagini vengono normalizzate automaticamente (max 1400px, JPEG q=0.85) prima
 
 ---
 
-## Arricchimento online (copertine + anno)
+## Arricchimento online (copertine)
 
 L'arricchimento online è accessibile dall'editor artwork (bottone **Cerca online**).
 
-La ricerca avviene in ordine su: **iTunes Search API → MusicBrainz/Cover Art Archive**. I risultati sono memorizzati nella cache locale per evitare richieste ripetute sullo stesso album.
+### Pannello di ricerca
 
-Modalità:
-- **Assistita** (default): scegli tu il candidato.
-- **Auto**: attiva dal pannello di ricerca per applicare automaticamente il candidato con score più alto sopra la soglia.
+All'apertura compaiono tre campi editabili pre-compilati con i metadati del brano:
+
+| Campo | Valore iniziale |
+|---|---|
+| **Artista** | Artista album (o artista del brano se assente) |
+| **Album** | Titolo dell'album |
+| **Titolo** | Titolo del singolo brano |
+
+La ricerca viene eseguita automaticamente all'apertura. Puoi modificare qualsiasi campo e cliccare **Cerca di nuovo** per raffinare i risultati senza chiudere il pannello.
+
+### Provider e strategia di ricerca
+
+La ricerca avviene su due provider in parallelo:
+
+1. **iTunes Search API** — query per *artista + album*; se il titolo del brano è diverso dall'album, viene eseguita anche una seconda query *artista + titolo* per recuperare singoli o brani che non compaiono nella ricerca per album. I risultati dei due passaggi vengono uniti e deduplicati; in caso di duplicati viene mantenuto lo score più alto.
+2. **MusicBrainz / Cover Art Archive** — query per *artista + album*; vengono inclusi solo i release con copertina front disponibile.
+
+I risultati sono ordinati per score (similarità con la query) e memorizzati nella cache locale per la sessione corrente, evitando richieste ripetute con gli stessi parametri.
+
+### Selezione e applicazione
+
+- Clicca un candidato nella griglia per selezionarlo; il dettaglio (album, artista, anno, fonte, score) compare in basso.
+- **Applica a questo brano** — scrive la copertina solo sul brano corrente.
+- **Applica all'album (N brani)** — scrive la stessa copertina su tutti i brani dello stesso album presenti in libreria.
+
+### Modalità automatica
+
+Attiva il toggle **Automatica** per applicare senza intervento manuale il primo candidato il cui score supera la soglia configurabile (50–100%). Utile per sessioni di arricchimento su più brani in sequenza.
 
 ---
 
@@ -170,6 +195,19 @@ Utile se usi la libreria su più dispositivi con iCloud Music Library: modifiche
 6. Usa **DB per tutti** / **Music per tutti** per applicare la stessa scelta all'intera selezione.
 7. Clicca **Applica** per eseguire le correzioni.
 
+### Brani "presenti in Music ma non su disco" — cause comuni
+
+Music.app conserva il percorso di ogni file come URL nel suo database interno. Se il file esiste fisicamente ma Music non lo trova, il campo `location` restituito dal bridge è `nil` o punta a un percorso obsoleto. Le cause più frequenti:
+
+| Causa | Spiegazione |
+|---|---|
+| **File spostato manualmente nel Finder** | Music.app non si accorge dello spostamento; il percorso nel database non viene aggiornato. |
+| **Disco esterno rimontato sotto path diverso** | Se il volume viene rinominato o rimontato con un punto di mount differente, il percorso assoluto cambia e il riferimento si rompe. |
+| **Libreria non consolidata** | Con "Mantieni organizzata la cartella Media" disattivata, i file possono trovarsi ovunque; spostamenti o rinomina manuale rompono i riferimenti. |
+| **iCloud Music Library — stato di sincronizzazione** | Con iCloud attivo, un brano può risultare "cloud-only" in Music.app anche se il file locale esiste ancora, perché lo stato di download non è stato aggiornato. |
+
+**Come correggere:** in Music.app seleziona il brano → tasto destro → *Informazioni sul file* → aggiorna il percorso manualmente. In alternativa usa *Archivio → Consolida libreria* per riportare tutti i file sotto la cartella gestita da Music.app e riallineare automaticamente i riferimenti.
+
 ---
 
 ## Cronologia operazioni e Undo
@@ -196,3 +234,26 @@ L'indice è memorizzato in `~/Library/Application Support/MusiFix/musifixindex.d
 - **MusiFix non sposta né rinomina mai i file**. Se l'opzione "Mantieni organizzata la cartella Media" è attiva in Music.app, è consigliabile disattivarla durante sessioni di editing di massa per evitare che Music rinomini i file autonomamente.
 - I brani **cloud-only** (non scaricati localmente) sono mostrati nell'indice ma non sono editabili — sono marcati come tali nella tabella.
 - Prima di operazioni massive (batch su migliaia di brani, eliminazioni multiple) è raccomandato avere un backup della libreria Music (`~/Music/Music/Music Library.musiclibrary`).
+
+---
+
+## Risoluzione dei problemi
+
+### La ricerca copertina non trova nulla
+
+1. Controlla che i campi Artista e Album nel pannello di ricerca siano corretti — Music.app a volte li lascia vuoti o incompleti.
+2. Prova a modificare manualmente i campi: usa la grafia inglese se il nome è internazionale, oppure inserisci solo il cognome dell'artista.
+3. Se il brano è un singolo o una raccolta, il campo **Titolo** può aiutare più del campo Album: cancella il valore Album e lascia solo Artista + Titolo, poi clicca **Cerca di nuovo**.
+4. I risultati MusicBrainz richiedono che la copertina sia archiviata nel Cover Art Archive — non tutti i release ne hanno una.
+
+### Un brano appare in Music.app ma il file non si trova nel Finder
+
+Vedi §[Brani "presenti in Music ma non su disco"](#brani-presenti-in-music-ma-non-su-disco--cause-comuni).
+
+### L'indice non si aggiorna dopo una modifica fatta direttamente in Music.app
+
+Esegui **Sync** dalla toolbar. La sync incrementale rileva le modifiche confrontando le date di modifica e aggiorna solo le righe cambiate.
+
+### Il pannello di divergenza mostra differenze su brani che sembrano corretti
+
+Questo può capitare con iCloud Music Library: un altro dispositivo può aver applicato una modifica che non si è ancora propagata all'indice locale. Usa l'opzione **Music per tutti** nel pannello divergenze per allineare l'indice ai valori correnti di Music.app, poi esegui una **Sync**.

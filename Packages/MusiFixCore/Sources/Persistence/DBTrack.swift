@@ -33,6 +33,7 @@ public struct DBTrack: Codable, FetchableRecord, PersistableRecord, Sendable {
     public var sampleRate: Double
     public var format: String              // "m4a", "mp3", ecc. (dal path)
     public var kind: String               // descrizione Music.app
+    public var cloudStatus: String         // codice 4-char iCloud (kMat/kUpl/…), "" = non noto
 
     public var musicDateAdded: Date?
     public var musicModDate: Date?         // modificationDate da Music
@@ -72,6 +73,7 @@ public struct DBTrack: Codable, FetchableRecord, PersistableRecord, Sendable {
         sampleRate: Double,
         format: String,
         kind: String,
+        cloudStatus: String = "",
         musicDateAdded: Date?,
         musicModDate: Date?,
         indexedAt: Date
@@ -101,6 +103,7 @@ public struct DBTrack: Codable, FetchableRecord, PersistableRecord, Sendable {
         self.sampleRate = sampleRate
         self.format = format
         self.kind = kind
+        self.cloudStatus = cloudStatus
         self.musicDateAdded = musicDateAdded
         self.musicModDate = musicModDate
         self.indexedAt = indexedAt
@@ -153,6 +156,28 @@ public struct DBOperation: Codable, FetchableRecord, PersistableRecord, Sendable
         self.valueBefore = valueBefore; self.valueAfter = valueAfter
         self.performedAt = performedAt; self.status = status
         self.errorMessage = errorMessage; self.batchID = batchID
+    }
+}
+
+/// Cache delle info album recuperate dallo Store (iTunes) — Fase D.
+public struct DBAlbumStoreInfo: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "album_store_info"
+    public var albumKey: String            // LOWER(albumArtist)+CHAR(31)+LOWER(album)
+    public var albumArtist: String
+    public var album: String
+    public var collectionId: Int?
+    public var storeTrackCount: Int?
+    public var matchState: String          // "pending" | "found" | "notFound" | "multiDisc"
+    public var fetchedAt: Date
+
+    public init(
+        albumKey: String, albumArtist: String, album: String,
+        collectionId: Int? = nil, storeTrackCount: Int? = nil,
+        matchState: String, fetchedAt: Date = Date()
+    ) {
+        self.albumKey = albumKey; self.albumArtist = albumArtist; self.album = album
+        self.collectionId = collectionId; self.storeTrackCount = storeTrackCount
+        self.matchState = matchState; self.fetchedAt = fetchedAt
     }
 }
 

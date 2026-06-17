@@ -75,3 +75,7 @@ Packages/MusiFixCore/Sources/
 ## Commit convention
 
 Messaggi in italiano, prefisso per fase se rilevante (es. `Fase 6:`).
+
+## Regole
+
+Tratta i warning come eccezioni: se presenti risolvili e ricorda di non introdurne più dello stesso tipo

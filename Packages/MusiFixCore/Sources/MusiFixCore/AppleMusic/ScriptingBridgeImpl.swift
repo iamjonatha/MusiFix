@@ -1,14 +1,31 @@
 import Foundation
 import MusicBridge
 
+// SBApplication non è thread-safe: accessi concorrenti corrompono lo stato interno
+// del proxy ObjC causando hang indefiniti. Questo actor serializza tutte le chiamate
+// al bridge ObjC garantendo un solo accesso alla volta.
+private actor BridgeSerializer {
+    private let bridge: MusicBridgeObjC
+    init(_ bridge: MusicBridgeObjC) { self.bridge = bridge }
+
+    func artworkData(pid: String) throws -> Data? {
+        try bridge.artworkData(forPersistentID: pid)
+    }
+    func setArtworkData(_ data: Data, pid: String) throws {
+        try bridge.setArtworkData(data, forPersistentID: pid)
+    }
+}
+
 /// Implementazione primaria via ScriptingBridge (ObjC wrapper MusicBridgeObjC).
 /// Restituisce nil se Music.app non è raggiungibile al momento dell'init.
 public final class ScriptingBridgeImpl: AppleMusicBridge, @unchecked Sendable {
     private let bridge: MusicBridgeObjC
+    private let serializer: BridgeSerializer
 
     public init?() {
         guard let b = MusicBridgeObjC.sharedBridge() else { return nil }
         self.bridge = b
+        self.serializer = BridgeSerializer(b)
     }
 
     // Swift converte automaticamente i metodi ObjC con NSError** in funzioni throws.
@@ -20,8 +37,14 @@ public final class ScriptingBridgeImpl: AppleMusicBridge, @unchecked Sendable {
     }
 
     public func trackMetadata(persistentID: String) async throws -> Track {
-        let raw = try bridge.trackMetadata(forPersistentID: persistentID)
-        return try Track(from: raw as? [String: Any] ?? [:])
+        do {
+            let raw = try bridge.trackMetadata(forPersistentID: persistentID)
+            return try Track(from: raw as? [String: Any] ?? [:])
+        } catch {
+            // ScriptingBridge può lanciare su track cloud-only (enumCodeValue su NSString);
+            // fallback via AppleScript che gestisce correttamente tutti i tipi di traccia.
+            return try await NSAppleScriptImpl().trackMetadata(persistentID: persistentID)
+        }
     }
 
     public func updateMetadata(_ update: TrackMetadataUpdate, persistentID: String) async throws {
@@ -30,11 +53,11 @@ public final class ScriptingBridgeImpl: AppleMusicBridge, @unchecked Sendable {
     }
 
     public func setArtwork(_ data: Data, persistentID: String) async throws {
-        try bridge.setArtworkData(data, forPersistentID: persistentID)
+        try await serializer.setArtworkData(data, pid: persistentID)
     }
 
     public func artwork(persistentID: String) async throws -> Data? {
-        return try bridge.artworkData(forPersistentID: persistentID)
+        return try await serializer.artworkData(pid: persistentID)
     }
 
     public func deleteTrack(persistentID: String) async throws {
@@ -74,6 +97,7 @@ extension Track {
             bitRate: (d[MBKeyBitRate] as? Int) ?? 0,
             sampleRate: (d[MBKeySampleRate] as? Double) ?? 0,
             kind: (d[MBKeyKind] as? String) ?? "",
+            cloudStatus: (d[MBKeyCloudStatus] as? String) ?? "",
             dateAdded: d[MBKeyDateAdded] as? Date,
             modificationDate: d[MBKeyModDate] as? Date
         )

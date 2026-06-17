@@ -24,6 +24,7 @@ NSString * const MBKeyDuration     = @"duration";
 NSString * const MBKeyBitRate      = @"bitRate";
 NSString * const MBKeySampleRate   = @"sampleRate";
 NSString * const MBKeyKind         = @"kind";
+NSString * const MBKeyCloudStatus  = @"cloudStatus";
 NSString * const MBKeyDateAdded    = @"dateAdded";
 NSString * const MBKeyModDate      = @"modificationDate";
 
@@ -33,6 +34,18 @@ static NSError *bridgeError(NSInteger code, NSString *msg) {
     return [NSError errorWithDomain:@"it.musifixapp.MusicBridge"
                                code:code
                            userInfo:@{NSLocalizedDescriptionKey: msg}];
+}
+
+/// Converte un OSType (codice 4-char dell'enum cloud status) in stringa.
+/// Restituisce "" per 0/unknown.
+static NSString *osTypeToString(OSType code) {
+    if (code == 0) return @"";
+    char c[5] = {
+        (char)((code >> 24) & 0xFF), (char)((code >> 16) & 0xFF),
+        (char)((code >> 8) & 0xFF),  (char)(code & 0xFF), 0
+    };
+    NSString *s = [NSString stringWithCString:c encoding:NSMacOSRomanStringEncoding];
+    return s ?: @"";
 }
 
 static NSDictionary *trackToDictionary(MusicTrack *t) {
@@ -57,6 +70,12 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
     d[MBKeyBitRate]      = @(t.bitRate);
     d[MBKeySampleRate]   = @(t.sampleRate);
     d[MBKeyKind]         = t.kind ?: @"";
+    // La lettura dell'enum cloudStatus può lanciare su alcune tracce: la isoliamo.
+    @try {
+        d[MBKeyCloudStatus] = osTypeToString((OSType)t.cloudStatus);
+    } @catch (NSException *ex) {
+        d[MBKeyCloudStatus] = @"";
+    }
     d[MBKeyDateAdded]    = t.dateAdded ?: [NSNull null];
     d[MBKeyModDate]      = t.modificationDate ?: [NSNull null];
     return [d copy];
@@ -95,10 +114,11 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
 }
 
 - (nullable MusicTrack *)trackWithPersistentID:(NSString *)pid {
-    for (MusicTrack *t in [_app tracks]) {
-        if ([t.persistentID isEqualToString:pid]) return t;
-    }
-    return nil;
+    // "whose" clause → un solo Apple Event invece di un loop su 25k brani
+    NSPredicate *pred = [NSPredicate predicateWithFormat:@"persistentID == %@", pid];
+    SBElementArray<MusicTrack *> *filtered =
+        (SBElementArray<MusicTrack *> *)[[_app tracks] filteredArrayUsingPredicate:pred];
+    return filtered.count > 0 ? filtered[0] : nil;
 }
 
 // ─── allTracks ───────────────────────────────────────────────────────────────

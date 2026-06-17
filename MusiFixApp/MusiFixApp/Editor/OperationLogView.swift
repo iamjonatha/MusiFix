@@ -6,6 +6,7 @@ import Persistence
 struct OperationLogView: View {
     let appState: AppState
     var onUndone: () -> Void
+    @Binding var isPresented: Bool
 
     @State private var batches: [DBOperation] = []
     @State private var undoingBatchID: String? = nil
@@ -21,6 +22,11 @@ struct OperationLogView: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
+                .help("Ricarica elenco")
+                Button { isPresented = false } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
             }
             .padding(12)
 

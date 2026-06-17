@@ -22,6 +22,7 @@ public struct Track: Sendable, Identifiable {
     public let bitRate: Int
     public let sampleRate: Double
     public let kind: String
+    public let cloudStatus: String      // codice 4-char Music.app: kMat/kUpl/kPur/kSub/…
     public let dateAdded: Date?
     public let modificationDate: Date?
 
@@ -45,6 +46,7 @@ public struct Track: Sendable, Identifiable {
         bitRate: Int = 0,
         sampleRate: Double = 0,
         kind: String = "",
+        cloudStatus: String = "",
         dateAdded: Date? = nil,
         modificationDate: Date? = nil
     ) {
@@ -67,8 +69,60 @@ public struct Track: Sendable, Identifiable {
         self.bitRate = bitRate
         self.sampleRate = sampleRate
         self.kind = kind
+        self.cloudStatus = cloudStatus
         self.dateAdded = dateAdded
         self.modificationDate = modificationDate
+    }
+}
+
+/// Stato iCloud di una traccia, indipendente dalla localizzazione di Music.app.
+/// Mappa i codici 4-char esposti dal bridge in valori semantici.
+public enum CloudStatus: String, Sendable {
+    case none, purchased, matched, uploaded, subscription
+    case ineligible, removed, error, duplicate, noLongerAvailable, notUploaded
+    case unknown
+
+    public init(code: String) {
+        switch code {
+        case "kPur": self = .purchased
+        case "kMat": self = .matched
+        case "kUpl": self = .uploaded
+        case "kSub": self = .subscription
+        case "kIne": self = .ineligible
+        case "kRem": self = .removed
+        case "kErr": self = .error
+        case "kDpl": self = .duplicate
+        case "kRdy": self = .noLongerAvailable
+        case "kNot": self = .notUploaded
+        case "", "kUnk": self = code.isEmpty ? .none : .unknown
+        default: self = .unknown
+        }
+    }
+
+    /// Etichetta in italiano per la UI.
+    public var label: String {
+        switch self {
+        case .none:              return "Locale"
+        case .purchased:         return "Acquistato"
+        case .matched:           return "Abbinato"
+        case .uploaded:          return "Caricato"
+        case .subscription:      return "Apple Music"
+        case .ineligible:        return "Non idoneo"
+        case .removed:           return "Rimosso"
+        case .error:             return "Errore"
+        case .duplicate:         return "Duplicato"
+        case .noLongerAvailable: return "Non più disponibile"
+        case .notUploaded:       return "Non caricato"
+        case .unknown:           return "Sconosciuto"
+        }
+    }
+
+    /// True se la traccia è ospitata in iCloud (abbinata/caricata/acquistata/abbonamento).
+    public var isCloudHosted: Bool {
+        switch self {
+        case .matched, .uploaded, .purchased, .subscription: return true
+        default: return false
+        }
     }
 }
 

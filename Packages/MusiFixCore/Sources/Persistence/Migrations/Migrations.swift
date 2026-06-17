@@ -9,6 +9,8 @@ public enum Migrations {
         migrator.registerMigration("v2_operation_batchid", migrate: v2_operation_batchid)
         migrator.registerMigration("v3_duplicates", migrate: v3_duplicates)
         migrator.registerMigration("v4_deletion_log", migrate: v4_deletion_log)
+        migrator.registerMigration("v5_cloud_status", migrate: v5_cloud_status)
+        migrator.registerMigration("v6_album_store_info", migrate: v6_album_store_info)
     }
 
     // ── v1: schema principale ─────────────────────────────────────────────────
@@ -150,6 +152,28 @@ public enum Migrations {
         }
         try db.create(index: "deletion_log_batchid", on: "deletion_log", columns: ["batchID"])
         try db.create(index: "deletion_log_date", on: "deletion_log", columns: ["deletedAt"])
+    }
+
+    // ── v5: stato iCloud reale (cloudStatus) ──────────────────────────────────
+    private static func v5_cloud_status(_ db: Database) throws {
+        try db.alter(table: "track") { t in
+            // Codice 4-char Music.app: kMat/kUpl/kPur/kSub/… ("" = non noto)
+            t.add(column: "cloudStatus", .text).notNull().defaults(to: "")
+        }
+    }
+
+    // ── v6: cache info album dallo Store (Fase D) ──────────────────────────────
+    private static func v6_album_store_info(_ db: Database) throws {
+        try db.create(table: "album_store_info") { t in
+            t.primaryKey("albumKey", .text)          // LOWER(albumArtist)+CHAR(31)+LOWER(album)
+            t.column("albumArtist", .text).notNull().defaults(to: "")
+            t.column("album", .text).notNull().defaults(to: "")
+            t.column("collectionId", .integer)       // iTunes collectionId
+            t.column("storeTrackCount", .integer)    // trackCount autorevole dallo Store
+            t.column("matchState", .text).notNull().defaults(to: "pending")
+                // "pending" | "found" | "notFound" | "multiDisc"
+            t.column("fetchedAt", .datetime).notNull()
+        }
     }
 
     // ── v1_fts5: ricerca full-text ─────────────────────────────────────────────

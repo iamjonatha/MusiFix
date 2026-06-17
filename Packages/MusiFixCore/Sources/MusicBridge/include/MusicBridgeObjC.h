@@ -27,6 +27,7 @@ extern NSString * const MBKeyDuration;    // NSNumber (double, seconds)
 extern NSString * const MBKeyBitRate;     // NSNumber (integer, kbps)
 extern NSString * const MBKeySampleRate;  // NSNumber (double, Hz)
 extern NSString * const MBKeyKind;        // NSString ("MPEG audio file" ecc.)
+extern NSString * const MBKeyCloudStatus; // NSString (codice 4-char: kMat/kUpl/kPur/kSub/…)
 extern NSString * const MBKeyDateAdded;   // NSDate
 extern NSString * const MBKeyModDate;     // NSDate
 

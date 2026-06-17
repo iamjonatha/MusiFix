@@ -53,6 +53,26 @@ struct DuplicatesView: View {
         .onAppear { Task { await searchMeta() } }
     }
 
+    @ViewBuilder
+    private func cloudBadge(_ track: DBTrack) -> some View {
+        let status = CloudStatus(code: track.cloudStatus)
+        let (icon, color): (String, Color) = {
+            switch status {
+            case .matched:      return ("icloud", .orange)
+            case .uploaded:     return ("icloud.and.arrow.up", .blue)
+            case .purchased:    return ("bag", .teal)
+            case .subscription: return ("music.note", .pink)
+            default:            return ("", .clear)
+            }
+        }()
+        if !icon.isEmpty {
+            Image(systemName: icon)
+                .font(.caption2)
+                .foregroundStyle(color)
+                .help(status.label)
+        }
+    }
+
     // ── Tab Metadati ──────────────────────────────────────────────────────────
 
     private var metaTab: some View {
@@ -148,8 +168,13 @@ struct DuplicatesView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(grp.tracks.first?.name ?? "—")
                             .font(.system(size: 12).bold()).lineLimit(1)
-                        Text(grp.tracks.map { $0.format.uppercased() }.joined(separator: " · "))
-                            .font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            Text(grp.tracks.map { $0.format.uppercased() }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                            ForEach(Array(grp.tracks.enumerated()), id: \.offset) { _, t in
+                                cloudBadge(t)
+                            }
+                        }
                         HStack(spacing: 4) {
                             Text(String(format: "%.0f%%", grp.score * 100))
                                 .font(.caption2).foregroundStyle(.tertiary)
@@ -277,6 +302,7 @@ private struct TrackComparisonCard: View {
                     }
                 }
                 Text(track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(track.album).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
                 HStack(spacing: 8) {
                     metaBadge(track.format.uppercased(), color: .blue)
                     if track.bitRate > 0 {
@@ -285,6 +311,8 @@ private struct TrackComparisonCard: View {
                     if track.duration > 0 {
                         metaBadge(formatDuration(track.duration), color: .gray)
                     }
+                    let (icloudLabel, icloudColor) = iCloudStatus(track)
+                    metaBadge(icloudLabel, color: icloudColor)
                 }
                 if let path = track.locationPath {
                     Text(URL(fileURLWithPath: path).lastPathComponent)
@@ -298,6 +326,18 @@ private struct TrackComparisonCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8)
             .stroke(isKeeper ? Color.green.opacity(0.3) : Color.secondary.opacity(0.15), lineWidth: 1))
+    }
+
+    private func iCloudStatus(_ track: DBTrack) -> (String, Color) {
+        let status = CloudStatus(code: track.cloudStatus)
+        switch status {
+        case .matched:      return (status.label, .orange)
+        case .uploaded:     return (status.label, .blue)
+        case .purchased:    return (status.label, .teal)
+        case .subscription: return (status.label, .pink)
+        case .none:         return (status.label, .green)
+        default:            return (status.label, .secondary)
+        }
     }
 
     private func metaBadge(_ text: String, color: Color) -> some View {
@@ -333,11 +373,15 @@ private struct ArtworkThumbnail: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .onAppear {
-            Task {
-                let data = try? await bridge.artwork(persistentID: pid)
-                await MainActor.run { if let d = data { image = NSImage(data: d) } }
-            }
+        .onAppear { load() }
+        .onChange(of: pid) { load() }
+    }
+
+    private func load() {
+        image = nil
+        Task {
+            let data = try? await bridge.artwork(persistentID: pid)
+            await MainActor.run { if let d = data { image = NSImage(data: d) } }
         }
     }
 }

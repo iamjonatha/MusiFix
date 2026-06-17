@@ -10,6 +10,7 @@ struct NormalizationView: View {
     @Binding var isPresented: Bool
 
     @State private var selectedTab = 0
+    @State private var previewField = 0   // 0=Generi, 1=Artisti — separato da selectedTab
     @State private var genrePreviews: [NormalizationPreview] = []
     @State private var artistPreviews: [NormalizationPreview] = []
     @State private var isLoading = false
@@ -67,7 +68,7 @@ struct NormalizationView: View {
 
     private var previewTab: some View {
         VStack(spacing: 8) {
-            Picker("Campo", selection: $selectedTab) {
+            Picker("Campo", selection: $previewField) {
                 Text("Generi (\(genrePreviews.count))").tag(0)
                 Text("Artisti (\(artistPreviews.count))").tag(1)
             }.pickerStyle(.segmented).padding(.top, 4)
@@ -77,7 +78,7 @@ struct NormalizationView: View {
                 ProgressView("Calcolo impatto…")
                 Spacer()
             } else {
-                let previews = selectedTab == 0 ? genrePreviews : artistPreviews
+                let previews = previewField == 0 ? genrePreviews : artistPreviews
                 if previews.isEmpty {
                     Spacer()
                     Text("Nessuna normalizzazione da applicare.").foregroundStyle(.secondary)
@@ -149,7 +150,7 @@ struct NormalizationView: View {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private var selectedPreviews: [NormalizationPreview] {
-        let all = selectedTab == 0 ? genrePreviews : artistPreviews
+        let all = previewField == 0 ? genrePreviews : artistPreviews
         return all.filter { !excludedIDs.contains($0.id) }
     }
 
@@ -171,12 +172,12 @@ struct NormalizationView: View {
         Task {
             do {
                 let excluded = Set(
-                    (selectedTab == 0 ? genrePreviews : artistPreviews)
+                    (previewField == 0 ? genrePreviews : artistPreviews)
                         .filter { excludedIDs.contains($0.id) }
                         .map(\.originalValue)
                 )
                 let result = try await appState.normalizationService.applyNormalization(
-                    selectedTab == 0 ? genrePreviews : artistPreviews,
+                    previewField == 0 ? genrePreviews : artistPreviews,
                     excluding: excluded
                 )
                 await MainActor.run {

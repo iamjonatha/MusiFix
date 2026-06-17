@@ -14,6 +14,8 @@ public actor EnrichmentService {
     // Rate limiter separato per provider
     private let iTunesRate = RateLimiter(interval: 0.5)
     private let mbRate = RateLimiter(interval: 1.1) // MusicBrainz: max 1 req/s
+    // Limiter conservativo per gli scan di massa (Fase D): evita i 403 di iTunes
+    private let albumScanRate = RateLimiter(interval: 3.0)
 
     public init() {
         let config = URLSessionConfiguration.default
@@ -25,25 +27,50 @@ public actor EnrichmentService {
     // ── Ricerca candidati ─────────────────────────────────────────────────────
 
     /// Cerca copertine per albumArtist + album su tutti i provider.
-    /// Restituisce i candidati ordinati per score decrescente.
-    public func search(albumArtist: String, album: String) async -> [ArtworkCandidate] {
-        let key = cacheKey(albumArtist, album)
+    /// Se trackTitle è fornito e diverso da album, esegue una seconda query iTunes
+    /// "artista + titolo" e unisce i risultati (dedup per URL, score massimo).
+    public func search(albumArtist: String, album: String, trackTitle: String = "") async -> [ArtworkCandidate] {
+        let useTitle = !trackTitle.isEmpty && trackTitle.lowercased() != album.lowercased()
+        let key = cacheKey(albumArtist, album, trackTitle)
         if let cached = cache[key] {
             log.debug("Cache hit: \(key)")
             return cached
         }
 
-        log.info("Ricerca copertina: \"\(albumArtist)\" — \"\(album)\"")
-        var results: [ArtworkCandidate] = []
+        let titleNote = useTitle ? " / \"\(trackTitle)\"" : ""
+        log.info("Ricerca copertina: \"\(albumArtist)\" — \"\(album)\"\(titleNote)")
 
-        async let itunesTask = searchiTunes(albumArtist: albumArtist, album: album)
-        let itunes = await (try? itunesTask) ?? []
-        results.append(contentsOf: itunes)
+        // iTunes: ricerca per album (parallela con MB)
+        async let itunesAlbumTask = searchiTunes(albumArtist: albumArtist, album: album)
+        let itunesAlbum = await (try? itunesAlbumTask) ?? []
 
+        // MusicBrainz: ricerca per album
         let mb = (try? await searchMusicBrainz(albumArtist: albumArtist, album: album)) ?? []
-        results.append(contentsOf: mb)
 
-        results.sort { $0.score > $1.score }
+        // iTunes: seconda ricerca per titolo brano (se diverso da album)
+        var itunesTitle: [ArtworkCandidate] = []
+        if useTitle {
+            let raw = (try? await searchiTunes(albumArtist: albumArtist, album: trackTitle)) ?? []
+            // Re-score: usa max(album_sim, title_sim) per non penalizzare risultati validi
+            itunesTitle = raw.map { c in
+                let artistSim = tokenSimilarity(albumArtist, c.artistName)
+                let albumSim  = tokenSimilarity(album,       c.collectionName)
+                let titleSim  = tokenSimilarity(trackTitle,  c.collectionName)
+                return c.withScore(artistSim * 0.4 + max(albumSim, titleSim) * 0.6)
+            }
+        }
+
+        // Merge: dedup per fullURL, mantieni score massimo
+        var byURL: [URL: ArtworkCandidate] = [:]
+        for c in itunesAlbum + mb + itunesTitle {
+            if let existing = byURL[c.fullURL] {
+                if c.score > existing.score { byURL[c.fullURL] = c }
+            } else {
+                byURL[c.fullURL] = c
+            }
+        }
+
+        let results = byURL.values.sorted { $0.score > $1.score }
         cache[key] = results
         log.info("Trovati \(results.count) candidati per \"\(album)\"")
         return results
@@ -60,6 +87,93 @@ public actor EnrichmentService {
 
     /// Svuota la cache in-memory (es. all'avvio di una nuova sessione di indicizzazione).
     public func clearCache() { cache.removeAll() }
+
+    // ── Lookup album (Fase D): conteggio tracce autorevole ──────────────────────
+
+    public struct AlbumLookupResult: Sendable {
+        public let collectionId: Int
+        public let storeTrackCount: Int
+        public let collectionName: String
+        public let artistName: String
+    }
+
+    /// Cerca su iTunes l'album e ne restituisce `collectionId` + `trackCount`
+    /// autorevole. Sceglie il risultato con la massima similarità su artista+album.
+    /// Usa il rate limiter conservativo (3 s) adatto agli scan di massa.
+    public func lookupAlbum(albumArtist: String, album: String) async throws -> AlbumLookupResult? {
+        await albumScanRate.wait()
+
+        var components = URLComponents(string: "https://itunes.apple.com/search")!
+        components.queryItems = [
+            URLQueryItem(name: "term",   value: "\(albumArtist) \(album)"),
+            URLQueryItem(name: "entity", value: "album"),
+            URLQueryItem(name: "media",  value: "music"),
+            URLQueryItem(name: "limit",  value: "10"),
+        ]
+        guard let url = components.url else { return nil }
+
+        let (data, response) = try await session.data(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw EnrichmentError.downloadFailed(url)
+        }
+        let decoded = try JSONDecoder().decode(iTunesSearchResponse.self, from: data)
+
+        // Sceglie il miglior match con collectionId + trackCount presenti.
+        var best: (score: Double, result: AlbumLookupResult)?
+        for r in decoded.results {
+            guard let cid = r.collectionId, let count = r.trackCount, count > 0 else { continue }
+            let artistSim = tokenSimilarity(albumArtist, r.artistName ?? "")
+            let albumSim  = tokenSimilarity(album,       r.collectionName ?? "")
+            let score = artistSim * 0.4 + albumSim * 0.6
+            if best == nil || score > best!.score {
+                best = (score, AlbumLookupResult(
+                    collectionId: cid, storeTrackCount: count,
+                    collectionName: r.collectionName ?? album,
+                    artistName: r.artistName ?? albumArtist
+                ))
+            }
+        }
+        // Soglia minima di confidenza sul match
+        guard let b = best, b.score >= 0.5 else { return nil }
+        return b.result
+    }
+
+    // ── Lookup tracce di una collection (Fase E): durate dallo Store ────────────
+
+    public struct StoreTrack: Sendable {
+        public let trackName: String
+        public let trackNumber: Int
+        public let durationSeconds: Double   // da trackTimeMillis
+    }
+
+    /// Recupera le tracce di una collection iTunes (via `lookup?id=…&entity=song`),
+    /// con nome, numero e durata. Usa il rate limiter conservativo.
+    public func lookupCollectionTracks(collectionId: Int) async throws -> [StoreTrack] {
+        await albumScanRate.wait()
+
+        var components = URLComponents(string: "https://itunes.apple.com/lookup")!
+        components.queryItems = [
+            URLQueryItem(name: "id",     value: "\(collectionId)"),
+            URLQueryItem(name: "entity", value: "song"),
+            URLQueryItem(name: "limit",  value: "200"),
+        ]
+        guard let url = components.url else { return [] }
+
+        let (data, response) = try await session.data(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw EnrichmentError.downloadFailed(url)
+        }
+        let decoded = try JSONDecoder().decode(iTunesLookupResponse.self, from: data)
+        return decoded.results.compactMap { r -> StoreTrack? in
+            guard r.wrapperType == "track", let ms = r.trackTimeMillis, let name = r.trackName
+            else { return nil }
+            return StoreTrack(
+                trackName: name,
+                trackNumber: r.trackNumber ?? 0,
+                durationSeconds: Double(ms) / 1000.0
+            )
+        }
+    }
 
     // ── iTunes Search API ─────────────────────────────────────────────────────
 
@@ -157,8 +271,8 @@ public actor EnrichmentService {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private func cacheKey(_ artist: String, _ album: String) -> String {
-        "\(artist.lowercased()):\(album.lowercased())"
+    private func cacheKey(_ artist: String, _ album: String, _ title: String = "") -> String {
+        "\(artist.lowercased()):\(album.lowercased()):\(title.lowercased())"
     }
 
     private func parseYear(_ s: String) -> Int? {
@@ -218,6 +332,21 @@ private struct iTunesAlbum: Codable {
     let collectionName: String?
     let artworkUrl100: String?
     let releaseDate: String?
+    let collectionId: Int?
+    let trackCount: Int?
+}
+
+// ── Codable iTunes lookup (entity=song) ─────────────────────────────────────────
+
+private struct iTunesLookupResponse: Codable {
+    let results: [iTunesSong]
+}
+
+private struct iTunesSong: Codable {
+    let wrapperType: String?
+    let trackName: String?
+    let trackNumber: Int?
+    let trackTimeMillis: Int?
 }
 
 // ── Codable MusicBrainz ───────────────────────────────────────────────────────

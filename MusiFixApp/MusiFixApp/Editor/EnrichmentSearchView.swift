@@ -11,6 +11,10 @@ struct EnrichmentSearchView: View {
     var onApplied: () -> Void
     @Binding var isPresented: Bool
 
+    @State private var searchArtist: String = ""
+    @State private var searchAlbum: String = ""
+    @State private var searchTitle: String = ""
+
     @State private var candidates: [ArtworkCandidate] = []
     @State private var isSearching = false
     @State private var searchError: String? = nil
@@ -38,20 +42,25 @@ struct EnrichmentSearchView: View {
         VStack(spacing: 0) {
             // ── Header ─────────────────────────────────────────────────────────
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Cerca copertina online")
-                        .font(.headline)
-                    Text("\"\(track.album)\" · \(track.albumArtist.isEmpty ? track.artist : track.albumArtist)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                Text("Cerca copertina online")
+                    .font(.headline)
                 Spacer()
                 Button { isPresented = false } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }.buttonStyle(.plain)
             }
             .padding(16)
+
+            Divider()
+
+            // ── Campi di ricerca ───────────────────────────────────────────────
+            VStack(spacing: 6) {
+                searchFieldRow(label: "Artista", text: $searchArtist)
+                searchFieldRow(label: "Album",   text: $searchAlbum)
+                searchFieldRow(label: "Titolo",  text: $searchTitle)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
 
             Divider()
 
@@ -87,7 +96,7 @@ struct EnrichmentSearchView: View {
                     ProgressView("Ricerca in corso…")
                     Spacer()
                 }
-                .frame(height: 280)
+                .frame(height: 230)
             } else if candidates.isEmpty {
                 VStack(spacing: 8) {
                     Spacer()
@@ -101,7 +110,7 @@ struct EnrichmentSearchView: View {
                     }
                     Spacer()
                 }
-                .frame(height: 280)
+                .frame(height: 230)
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 10) {
@@ -115,7 +124,7 @@ struct EnrichmentSearchView: View {
                     }
                     .padding(12)
                 }
-                .frame(height: 300)
+                .frame(height: 230)
             }
 
             Divider()
@@ -193,10 +202,32 @@ struct EnrichmentSearchView: View {
             .padding(16)
         }
         .frame(width: 520, height: 560)
-        .onAppear { startSearch() }
+        .onAppear {
+            searchArtist = track.albumArtist.isEmpty ? track.artist : track.albumArtist
+            searchAlbum  = track.album
+            searchTitle  = track.name
+            startSearch()
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    @ViewBuilder
+    private func searchFieldRow(label: String, text: Binding<String>) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 46, alignment: .trailing)
+            TextField("", text: text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        }
+    }
 
     private func startSearch() {
         isSearching = true
@@ -205,16 +236,17 @@ struct EnrichmentSearchView: View {
         selected = nil
         appliedOK = false
 
-        let artist = track.albumArtist.isEmpty ? track.artist : track.albumArtist
-        let album = track.album
+        let artist = searchArtist
+        let album  = searchAlbum
+        let title  = searchTitle
         Task {
-            let results = await appState.enrichmentService.search(albumArtist: artist, album: album)
+            let results = await appState.enrichmentService.search(
+                albumArtist: artist, album: album, trackTitle: title)
             await MainActor.run {
                 isSearching = false
                 candidates = results
                 if results.isEmpty { searchError = "Nessun risultato per \"\(album)\"." }
 
-                // Modalità automatica
                 if autoMode, let best = results.first, best.score >= autoThreshold {
                     selected = best
                     applyToTrack(pids: [track.persistentID])
@@ -273,6 +305,8 @@ private struct CandidateCard: View {
     let isSelected: Bool
     let onTap: () -> Void
 
+    @State private var zoom = false
+
     var body: some View {
         VStack(spacing: 4) {
             AsyncImage(url: candidate.previewURL) { phase in
@@ -294,6 +328,24 @@ private struct CandidateCard: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 3)
             )
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    zoom = true
+                } label: {
+                    Image(systemName: "magnifyingglass.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.white)
+                        .shadow(radius: 2)
+                }
+                .buttonStyle(.plain)
+                .padding(4)
+                .help("Mostra copertina in grande")
+                .popover(isPresented: $zoom, arrowEdge: .trailing) {
+                    ArtworkURLZoomPopover(url: candidate.fullURL,
+                                         title: candidate.collectionName,
+                                         artist: candidate.artistName)
+                }
+            }
 
             HStack(spacing: 4) {
                 providerDot(candidate.provider)
@@ -315,5 +367,38 @@ private struct CandidateCard: View {
         Circle()
             .fill(provider == "iTunes" ? Color.pink : Color.orange)
             .frame(width: 6, height: 6)
+    }
+}
+
+// ── Zoom popover per URL candidato ────────────────────────────────────────────
+
+private struct ArtworkURLZoomPopover: View {
+    let url: URL
+    let title: String
+    let artist: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().scaledToFit()
+                        .frame(width: 400, height: 400)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                case .failure:
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .font(.system(size: 48)).foregroundStyle(.tertiary)
+                        .frame(width: 400, height: 400)
+                case .empty:
+                    ProgressView("Caricamento…")
+                        .frame(width: 400, height: 400)
+                @unknown default:
+                    EmptyView()
+                }
+            }
+            Text(title).font(.caption.bold()).lineLimit(1)
+            Text(artist).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .padding(12)
     }
 }

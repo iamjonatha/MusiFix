@@ -23,6 +23,20 @@ typedef NS_ENUM(NSUInteger, MusicEKnd) {
     MusicEKndMusicVideo      = 'kVdT',
 };
 
+typedef NS_ENUM(NSUInteger, MusicEClS) {
+    MusicEClSUnknown      = 'kUnk',
+    MusicEClSPurchased    = 'kPur',
+    MusicEClSMatched      = 'kMat',
+    MusicEClSUploaded     = 'kUpl',
+    MusicEClSIneligible   = 'kIne',
+    MusicEClSRemoved      = 'kRem',
+    MusicEClSError        = 'kErr',
+    MusicEClSDuplicate    = 'kDpl',
+    MusicEClSSubscription = 'kSub',
+    MusicEClSNoLongerAvailable = 'kRdy',
+    MusicEClSNotUploaded  = 'kNot',
+};
+
 typedef NS_ENUM(NSUInteger, MusicESrc) {
     MusicESrcLibrary     = 'kLib',
     MusicESrcCD          = 'kACD',
@@ -71,7 +85,7 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 @property (copy, readonly) NSDate *dateAdded;
 @property (copy, readonly) NSDate *modificationDate;
 @property (readonly) NSInteger databaseID;
-@property BOOL cloudStatus;
+@property (readonly) MusicEClS cloudStatus;
 - (SBElementArray<MusicArtwork *> *)artworks;
 - (void)delete;
 - (id)get;

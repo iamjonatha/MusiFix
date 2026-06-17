@@ -58,6 +58,12 @@ final class TrackBrowserViewModel: ObservableObject {
         loadInitialPage(db: db)
     }
 
+    func sort(by field: TrackSortField, ascending: Bool, db: AppDatabase) {
+        sortField = field
+        sortAscending = ascending
+        loadInitialPage(db: db)
+    }
+
     func loadMoreIfNeeded(currentIndex: Int, db: AppDatabase) {
         let currentCount = tracks.count
         guard currentIndex >= currentCount - 50, currentCount < totalCount else { return }

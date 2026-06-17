@@ -158,6 +158,10 @@ public struct TrackDAO: Sendable {
                 """)
         case .cloudOnly:
             return request.filter(Column("isCloudOnly") == true)
+        case .localOnly:
+            return request.filter(Column("isCloudOnly") == false)
+        case .cloudStatus(let code):
+            return request.filter(Column("cloudStatus") == code)
         case .genre(let g):
             return request.filter(Column("genreNormalized") == g.lowercased())
         case .artist(let a):
@@ -178,6 +182,7 @@ public struct TrackDAO: Sendable {
         switch field {
         case .name:        col = Column("name")
         case .artist:      col = Column("artistNormalized")
+        case .albumArtist: col = Column("albumArtist")
         case .album:       col = Column("albumNormalized")
         case .year:        col = Column("year")
         case .genre:       col = Column("genreNormalized")
@@ -194,7 +199,7 @@ public struct TrackDAO: Sendable {
 // ── Tipi di supporto ─────────────────────────────────────────────────────────
 
 public enum TrackSortField: String, Sendable, CaseIterable {
-    case name, artist, album, year, genre, duration, dateAdded
+    case name, artist, albumArtist, album, year, genre, duration, dateAdded
 }
 
 public enum TrackFilter: Sendable, Equatable {
@@ -210,6 +215,8 @@ public enum TrackFilter: Sendable, Equatable {
     case multipleAlbumValues     // album incongruenti nello stesso gruppo artist+album
     case multipleAlbumArtistValues // albumArtist incongruenti nello stesso album
     case cloudOnly
+    case localOnly
+    case cloudStatus(String)   // codice 4-char: kMat, kUpl, kPur, kSub, …
     case genre(String)
     case artist(String)
     case album(String)
