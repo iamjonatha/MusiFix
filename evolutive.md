@@ -32,9 +32,10 @@ proprietà reale `cloudStatus` di Music.app.
 | **C** | `cloudStatus` nel bridge + reindex | Alta | No | — | ✅ (richiede reindex) |
 | **F** | Report album con tracce non abbinate/caricate | Media | No | C | ✅ |
 | **E** | Diff durate caricato vs Store | Media-alta | Sì | C, D | ✅ |
+| **G2** | Allineamento numeri traccia/disco da Store (singolo album) | Alta | Sì | D | ✅ |
 
-Ordine di esecuzione: **A → B → G → D → D-bis → C → F → E**.
-Multi-disco: escluso in fase 1 (album con `discCount>1` marcati e saltati nelle fasi online).
+Ordine di esecuzione: **A → B → G → D → D-bis → C → F → E → G2**.
+Multi-disco: escluso dai fix automatici; la Fase G2 supporta multi-disco in modo nativo (disc-aware).
 
 ---
 
@@ -99,6 +100,36 @@ Multi-disco: escluso in fase 1 (album con `discCount>1` marcati e saltati nelle 
 - **Vista Album incorporata** (non più sheet): toggle segmentato Brani/Album nella toolbar di `ContentView`; `AlbumsView` refactor a vista inline (rimosso `isPresented`/frame fisso).
 - **Drill ai brani**: doppio click / menu "Apri brani per modifica" → filtra browser su album + torna alla vista brani (editor in-place). `onOpenTracks`.
 - **Zoom copertina**: clic su copertina album/brano → `ArtworkZoomPopover` (400px + risoluzione). In `AlbumArtwork` e `ArtworkEditorView`.
+
+### Fase G2 — Allineamento numeri traccia/disco da Store  ✅
+
+**Obiettivo:** dato un album, cerca le edizioni su iTunes e propone l'allineamento 1:1 dei numeri traccia/disco con la tracklist Store scelta. Disc-aware: supporta natively multi-disco.
+
+**Flusso (2 step):**
+1. **Scelta edizione** — `EnrichmentService.lookupAlbumCandidates` restituisce top-N candidati (nome, artista, anno, n.tracce, n.dischi, score). L'utente sceglie l'edizione corretta.
+2. **Mappa di conferma editabile** — `AlbumService.proposeAlbumPositions` calcola il match 1:1 greedy e produce `[PositionProposal]`. Ogni riga mostra posizione attuale, abbinamento store, campi numerici editabili. Colore per confidenza. Niente viene scritto finché non si preme "Scrivi".
+
+**Algoritmo match:**
+- Normalizzazione titolo: fold diacritici, strip `(...)`, `[...]`, `- suffix`, `feat./ft.`, `&`→`and` → core lowercase.
+- Similarità ibrida: `max(Jaccard(core), 1 − Levenshtein/maxLen)`.
+- Assegnamento greedy 1:1 (per score decrescente, ogni store track usato una volta). Disco derivato dal match store, non dal tag locale.
+- Post-pass: duplicati `(disco, traccia)` → declassati a `uncertain`.
+- Conteggi coerenti per-disco: `trackCount` = max trackNumber sul disco, `discCount` = max disco store.
+
+**Confidenza:**
+- `high` (verde, pre-spuntata): `sim ≥ 0.80`, `Δ ≥ 0.25` o mutual, no qual-mismatch.
+- `medium` (arancione): `0.55 ≤ sim < 0.80`.
+- `uncertain` (rosso): `sim < 0.55`, o `Δ < 0.10`, o qual-mismatch (Live/Remastered), o conflitto greedy.
+- `unmatched` (rosso, campi vuoti): nessun match trovato — da compilare a mano.
+
+**Tracce senza match (bonus track, edizioni divergenti):** la riga rimane nella mappa con campi vuoti e confidenza `unmatched`. L'utente li compila manualmente; non vengono scritte se vuote.
+
+**Multi-disco:** supportato nativamente. L'algoritmo aggrega tutte le tracce store e deriva `(disco, traccia)` dal match. Nessun cambiamento all'aggregazione `albumGroups`.
+
+**File modificati:**
+- `EnrichmentService.swift`: `StoreTrack` += `trackCount/discNumber/discCount`; nuovo `lookupAlbumCandidates`; `iTunesSong`/`iTunesAlbum` Codable aggiornati.
+- `AlbumService.swift`: structs `TrackMatchConfidence`, `PositionProposal`, `AlbumAlignment`; metodi `proposeAlbumPositions(for:candidate:)`, `writeProposedPositions`; helpers `trackTitleCore`, `hybridTitleSimilarity`, `jaccardTokens`, `levenshtein`.
+- `AlbumsView.swift`: `AlbumPositionAlignSheet` (2 step), `ProposalRow` (riga editabile), voce menu contestuale "Allinea numeri traccia/disco…".
 
 ## Note operative finali
 1. **Reindex richiesto** ("Indicizza tutto") per popolare `cloudStatus` (abilita F ed E).

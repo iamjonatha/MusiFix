@@ -65,7 +65,10 @@ public final class ScriptingBridgeImpl: AppleMusicBridge, @unchecked Sendable {
     }
 
     public func revealInMusic(persistentID: String) async throws {
-        try bridge.revealInMusic(forPersistentID: persistentID)
+        // ScriptingBridge non invia un vero "whose clause" per filteredArrayUsingPredicate:
+        // — enumera tutti i brani in-process e il riferimento risultante non è valido per
+        // il comando reveal. Si usa NSAppleScript che invia il corretto Apple Event direttamente.
+        try await NSAppleScriptImpl().revealInMusic(persistentID: persistentID)
     }
 }
 

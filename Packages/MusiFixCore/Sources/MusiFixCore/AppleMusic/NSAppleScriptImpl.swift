@@ -96,6 +96,125 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
         return parseTabDelimitedTracks(raw)
     }
 
+    // ─── Scansione presenza copertina ─────────────────────────────────────────
+
+    /// Controlla quali brani nel range 1-based [start, end] hanno almeno una
+    /// copertina in Music.app. Restituisce due set: quelli CON copertina e quelli
+    /// SENZA. Ogni brano richiede ~2 Apple Events (persistent ID + count of artworks);
+    /// su 25k brani in chunk da 200 = ~250 secondi stimati (0.5ms/event su macOS).
+    public func artworkPresenceScan(from start: Int, to end: Int) async throws -> (having: Set<String>, lacking: Set<String>) {
+        let script = """
+        tell application "Music"
+            set lib to library playlist 1
+            set output to ""
+            repeat with i from \(start) to \(end)
+                try
+                    set t to track i of lib
+                    set pid to (persistent ID of t) as string
+                    if (count of artworks of t) > 0 then
+                        set output to output & pid & tab & "1" & return
+                    else
+                        set output to output & pid & tab & "0" & return
+                    end if
+                end try
+            end repeat
+            return output
+        end tell
+        """
+        let raw = try runAppleScript(script)
+        var having = Set<String>()
+        var lacking = Set<String>()
+        for line in raw.components(separatedBy: "\r") where !line.isEmpty {
+            let parts = line.components(separatedBy: "\t")
+            guard parts.count >= 2 else { continue }
+            if parts[1] == "1" { having.insert(parts[0]) } else { lacking.insert(parts[0]) }
+        }
+        return (having, lacking)
+    }
+
+    // ─── Risoluzione location autoritativa da Music ────────────────────────
+
+    /// Per i `pids` indicati restituisce il path POSIX reale del file locale
+    /// così come noto a Music.app — la sola fonte di verità affidabile quando
+    /// l'euristica filesystem (Artist/Album/NN) fallisce (compilation, nomi
+    /// sanitizzati, prefissi disco nei filename, ecc.).
+    ///
+    /// Strategia: scansione della libreria per indice a blocchi. Per ogni blocco
+    /// un solo Apple Event recupera la lista dei `persistent ID`; la `location`
+    /// viene poi risolta SOLO per gli indici i cui pid sono richiesti, ognuno
+    /// isolato in `try`/`with timeout` (come `trackMetadata`) così un alias
+    /// irrisolvibile non blocca il resto. I brani senza location locale (cloud/
+    /// streaming reali) semplicemente non compaiono nella mappa restituita.
+    public func locationsForPersistentIDs(_ pids: Set<String>) async throws -> [String: String] {
+        guard !pids.isEmpty else { return [:] }
+        let total = try await trackCount()
+        var result: [String: String] = [:]
+        let chunkSize = 1000
+        var start = 1
+        while start <= total {
+            try Task.checkCancellation()
+            let end = min(start + chunkSize - 1, total)
+
+            // 1) Lista pid del blocco in un solo Apple Event.
+            let pidScript = """
+            tell application "Music"
+                set lib to library playlist 1
+                set output to ""
+                set ps to persistent ID of (tracks \(start) thru \(end) of lib)
+                repeat with p in ps
+                    set output to output & (p as string) & return
+                end repeat
+            end tell
+            return output
+            """
+            let pidRaw = try runAppleScript(pidScript)
+            let chunkPIDs = pidRaw.components(separatedBy: "\r").filter { !$0.isEmpty }
+
+            // 2) Indici (assoluti, 1-based) dei soli brani richiesti.
+            var wantedIndices: [Int] = []
+            for (offset, pid) in chunkPIDs.enumerated() where pids.contains(pid) {
+                wantedIndices.append(start + offset)
+            }
+            if wantedIndices.isEmpty { start = end + 1; continue }
+
+            // 3) Location per gli indici richiesti, isolata per-track.
+            let idxList = wantedIndices.map(String.init).joined(separator: ", ")
+            let locScript = """
+            tell application "Music"
+                set lib to library playlist 1
+                set output to ""
+                repeat with idx in {\(idxList)}
+                    set tPid to ""
+                    set tLoc to ""
+                    try
+                        set t to track idx of lib
+                        set tPid to (persistent ID of t) as string
+                        with timeout of 2 seconds
+                            set locAlias to location of t
+                            if locAlias is not missing value then
+                                set tLoc to (POSIX path of locAlias) as string
+                            end if
+                        end timeout
+                    end try
+                    set output to output & tPid & tab & tLoc & return
+                end repeat
+            end tell
+            return output
+            """
+            let locRaw = try runAppleScript(locScript)
+            for line in locRaw.components(separatedBy: "\r") where !line.isEmpty {
+                let parts = line.components(separatedBy: "\t")
+                guard parts.count >= 2 else { continue }
+                let pid = parts[0]
+                let path = parts[1]
+                if !pid.isEmpty, !path.isEmpty { result[pid] = path }
+            }
+
+            start = end + 1
+        }
+        return result
+    }
+
     // Parser per il fetch bulk (senza location). "missing value" viene emesso da
     // AppleScript quando un campo non ha valore — trattiamo come "" o 0.
     private func parseTabDelimitedTracks(_ raw: String) -> [Track] {

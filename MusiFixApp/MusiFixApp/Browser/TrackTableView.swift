@@ -199,7 +199,13 @@ struct TrackTableView: NSViewRepresentable {
         @objc func showInMusic(_ sender: NSMenuItem) {
             guard let pid = sender.representedObject as? String else { return }
             let b = bridge
-            Task { try? await b.revealInMusic(persistentID: pid) }
+            Task {
+                do {
+                    try await b.revealInMusic(persistentID: pid)
+                } catch {
+                    print("[TrackTableView] revealInMusic fallito per \(pid): \(error)")
+                }
+            }
         }
 
         // DataSource

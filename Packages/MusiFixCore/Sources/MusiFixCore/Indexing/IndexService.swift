@@ -293,7 +293,10 @@ public actor IndexService {
         }.value
         log.info("File audio trovati nell'indice: \(fileIndex.count)")
 
-        // Carica dal DB i brani senza path (tutti locali dopo il fetch senza alias)
+        // Carica dal DB i brani senza path. Include anche quelli marcati isCloudOnly=1
+        // da una sync precedente: il flag potrebbe essere stale (es. brano abbinato/
+        // caricato che è stato poi scaricato localmente). Il filesystem è la fonte di
+        // verità: se il file c'è → locale; se non c'è → cloud-only.
         struct TrackRow: Sendable {
             let pid: String; let artist: String; let albumArtist: String
             let album: String; let trackNum: Int
@@ -301,7 +304,7 @@ public actor IndexService {
         let tracksToResolve: [TrackRow] = try db.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT persistentID, artist, albumArtist, album, trackNumber
-                FROM track WHERE locationPath IS NULL AND isCloudOnly = 0
+                FROM track WHERE locationPath IS NULL
                 """)
                 .map { TrackRow(pid: $0["persistentID"] ?? "",
                                 artist: $0["artist"] ?? "",
@@ -323,8 +326,27 @@ public actor IndexService {
         }
         log.info("Path risolti via filesystem: \(updates.count)/\(tracksToResolve.count)")
 
-        // Brani che non hanno trovato un file locale → sono cloud-only
-        let resolvedPIDs = Set(updates.map(\.pid))
+        // Brani non trovati dall'euristica filesystem. L'euristica fallisce su
+        // strutture che non seguono Artist/Album/NN: compilation (cartella
+        // Compilations), nomi sanitizzati da Music (es. "...Adriano" → "_..Adriano",
+        // apostrofi curvi), prefissi disco nei filename ("1-08"), trackNumber=0.
+        // Per questi chiediamo a Music.app la location reale: è la sola fonte di
+        // verità affidabile. Solo i brani per cui Music NON restituisce un file
+        // locale sono davvero cloud-only.
+        var resolvedPIDs = Set(updates.map(\.pid))
+        let heuristicUnresolved = tracksToResolve.map(\.pid).filter { !resolvedPIDs.contains($0) }
+
+        if !heuristicUnresolved.isEmpty {
+            log.info("Recovery location da Music per \(heuristicUnresolved.count) brani non risolti dall'euristica")
+            let musicPaths = (try? await bulkFetcher.locationsForPersistentIDs(Set(heuristicUnresolved))) ?? [:]
+            log.info("Location recuperate da Music: \(musicPaths.count)/\(heuristicUnresolved.count)")
+            for (pid, path) in musicPaths where FileManager.default.fileExists(atPath: path) {
+                updates.append((pid, path))
+                resolvedPIDs.insert(pid)
+            }
+        }
+
+        // Quel che resta senza path è cloud-only reale.
         let unresolvedPIDs = tracksToResolve.map(\.pid).filter { !resolvedPIDs.contains($0) }
         if !unresolvedPIDs.isEmpty {
             let placeholders = unresolvedPIDs.map { _ in "?" }.joined(separator: ",")
@@ -335,7 +357,7 @@ public actor IndexService {
                     arguments: args
                 )
             }
-            log.info("Brani marcati cloud-only (file non trovato): \(unresolvedPIDs.count)")
+            log.info("Brani marcati cloud-only (nessun file locale noto a Music): \(unresolvedPIDs.count)")
         }
 
         let updatesSnapshot = updates
@@ -368,6 +390,115 @@ public actor IndexService {
 
         setProgress(.init(phase: .resolvingLocations(resolved: updates.count, total: tracksToResolve.count),
                           processed: updates.count, total: tracksToResolve.count, lastSyncDate: nil))
+    }
+
+    // ── Scansione presenza copertina (hasArtwork) ─────────────────────────────
+
+    /// Verifica in Music.app se ogni brano ha almeno una copertina e aggiorna
+    /// la colonna `hasArtwork` nel DB (0 = no, 1 = sì). Operazione on-demand:
+    /// non parte automaticamente durante il sync per evitare ~2 Apple Events/brano
+    /// sull'intera libreria; va avviata una volta sola dal pulsante "Scansiona
+    /// copertine" e poi ri-eseguita solo dopo importazioni massicce.
+    @discardableResult
+    public func scanArtworkPresence() async throws -> Int {
+        let total = try await bulkFetcher.trackCount()
+        log.info("Scansione copertine avviata: \(total) brani")
+        setProgress(.init(phase: .enrichingFiles(completed: 0, total: total),
+                          processed: 0, total: total, lastSyncDate: nil))
+
+        let chunkSize = 200
+        var start = 1
+        var scanned = 0
+
+        while start <= total {
+            try Task.checkCancellation()
+            let end = min(start + chunkSize - 1, total)
+            let (having, lacking) = try await bulkFetcher.artworkPresenceScan(from: start, to: end)
+
+            let h = Array(having)
+            let l = Array(lacking)
+            try db.write { db in
+                if !h.isEmpty {
+                    let ph = h.map { _ in "?" }.joined(separator: ",")
+                    try db.execute(sql: "UPDATE track SET hasArtwork=1 WHERE persistentID IN (\(ph))",
+                                   arguments: StatementArguments(h.map { DatabaseValue(value: $0) }))
+                }
+                if !l.isEmpty {
+                    let pl = l.map { _ in "?" }.joined(separator: ",")
+                    try db.execute(sql: "UPDATE track SET hasArtwork=0 WHERE persistentID IN (\(pl))",
+                                   arguments: StatementArguments(l.map { DatabaseValue(value: $0) }))
+                }
+            }
+            scanned += h.count + l.count
+            start = end + 1
+            setProgress(.init(phase: .enrichingFiles(completed: scanned, total: total),
+                              processed: scanned, total: total, lastSyncDate: nil))
+        }
+
+        log.info("Scansione copertine completata: \(scanned) brani")
+        setProgress(.init(phase: .done, processed: scanned, total: total, lastSyncDate: nil))
+        return scanned
+    }
+
+    // ── Riparazione mirata brani marcati cloud-only ───────────────────────────
+
+    /// Recupera la location reale da Music.app per i brani attualmente marcati
+    /// `isCloudOnly` (file non trovato dall'euristica filesystem). Più veloce di
+    /// un re-index completo: non rifà il fetch dei 25k brani, agisce solo sul
+    /// sottoinsieme cloud-only. I brani per cui Music restituisce un file locale
+    /// esistente tornano editabili; gli altri restano cloud-only (cloud reali).
+    @discardableResult
+    public func repairCloudOnlyLocations() async throws -> Int {
+        let cloudPIDs: [String] = try db.read { db in
+            try String.fetchAll(db, sql: "SELECT persistentID FROM track WHERE isCloudOnly=1")
+        }
+        log.info("Riparazione cloud-only: \(cloudPIDs.count) candidati")
+        guard !cloudPIDs.isEmpty else {
+            setProgress(.init(phase: .done, processed: 0, total: 0, lastSyncDate: nil))
+            return 0
+        }
+        setProgress(.init(phase: .resolvingLocations(resolved: 0, total: cloudPIDs.count),
+                          processed: 0, total: cloudPIDs.count, lastSyncDate: nil))
+
+        let musicPaths = try await bulkFetcher.locationsForPersistentIDs(Set(cloudPIDs))
+        log.info("Location recuperate da Music: \(musicPaths.count)/\(cloudPIDs.count)")
+
+        var repaired: [(pid: String, path: String)] = []
+        for (pid, path) in musicPaths where FileManager.default.fileExists(atPath: path) {
+            repaired.append((pid, path))
+        }
+
+        let snapshot = repaired
+        try db.write { db in
+            for (pid, path) in snapshot {
+                let ext = (path as NSString).pathExtension.lowercased()
+                let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+                let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970
+                let size = (attrs?[.size] as? Int64) ?? (attrs?[.size] as? NSNumber)?.int64Value
+                try db.execute(
+                    sql: """
+                        UPDATE track SET locationPath=?, format=?, locationMtime=?,
+                        locationSize=?, isCloudOnly=0, isEditable=1 WHERE persistentID=?
+                        """,
+                    arguments: [path, ext, mtime, size, pid]
+                )
+            }
+        }
+        log.info("Brani riparati (ora editabili): \(repaired.count)")
+
+        // Hash parziale in background per i brani riparati
+        Task.detached(priority: .utility) { [repaired] in
+            for (pid, path) in repaired {
+                guard let hash = await self.computePartialHash(path: path) else { continue }
+                try? self.db.write { db in
+                    try db.execute(sql: "UPDATE track SET contentHash=? WHERE persistentID=?",
+                                   arguments: [hash, pid])
+                }
+            }
+        }
+
+        setProgress(.init(phase: .done, processed: repaired.count, total: cloudPIDs.count, lastSyncDate: nil))
+        return repaired.count
     }
 
     /// Estrae il numero di traccia dal prefisso numerico del nome file.

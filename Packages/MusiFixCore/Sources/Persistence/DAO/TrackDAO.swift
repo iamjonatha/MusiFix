@@ -123,7 +123,7 @@ public struct TrackDAO: Sendable {
         case .none:
             return request
         case .missingArtwork:
-            return request  // placeholder: in Fase 2 aggiungeremo colonna hasArtwork
+            return request.filter(Column("hasArtwork") == 0)
         case .missingYear:
             return request.filter(Column("year") == 0)
         case .missingArtist:
@@ -170,7 +170,24 @@ public struct TrackDAO: Sendable {
             return request.filter(Column("albumNormalized") == a.lowercased())
         case .year(let y):
             return request.filter(Column("year") == y)
+        case .addedYear(let y):
+            return request.filter(sql: "CAST(strftime('%Y', musicDateAdded) AS INTEGER) = ?",
+                                  arguments: [y])
         }
+    }
+
+    public static func fetchDistinctGenres(in db: Database) throws -> [String] {
+        try String.fetchAll(db, sql: """
+            SELECT DISTINCT genre FROM track
+            WHERE genre != '' ORDER BY genre COLLATE NOCASE
+            """)
+    }
+
+    public static func fetchDistinctAddedYears(in db: Database) throws -> [Int] {
+        try Int.fetchAll(db, sql: """
+            SELECT DISTINCT CAST(strftime('%Y', musicDateAdded) AS INTEGER) yr
+            FROM track WHERE musicDateAdded IS NOT NULL ORDER BY yr DESC
+            """)
     }
 
     private static func applySorting(
@@ -204,7 +221,7 @@ public enum TrackSortField: String, Sendable, CaseIterable {
 
 public enum TrackFilter: Sendable, Equatable {
     case none
-    case missingArtwork          // placeholder (Fase 2: colonna hasArtwork)
+    case missingArtwork
     case missingYear
     case missingArtist
     case missingAlbum
@@ -212,15 +229,16 @@ public enum TrackFilter: Sendable, Equatable {
     case missingGenre
     case missingTrackNumber
     case missingDiscNumber
-    case multipleAlbumValues     // album incongruenti nello stesso gruppo artist+album
-    case multipleAlbumArtistValues // albumArtist incongruenti nello stesso album
+    case multipleAlbumValues
+    case multipleAlbumArtistValues
     case cloudOnly
     case localOnly
-    case cloudStatus(String)   // codice 4-char: kMat, kUpl, kPur, kSub, …
+    case cloudStatus(String)
     case genre(String)
     case artist(String)
     case album(String)
     case year(Int)
+    case addedYear(Int)          // anno di aggiunta a Music.app
 }
 
 // ── FTS5 search ──────────────────────────────────────────────────────────────

@@ -30,3 +30,6 @@ DerivedData/
 *.swp
 *~
 .idea/
+
+# Build output (xcodebuild)
+build/

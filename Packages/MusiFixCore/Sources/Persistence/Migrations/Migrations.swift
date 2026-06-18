@@ -11,6 +11,7 @@ public enum Migrations {
         migrator.registerMigration("v4_deletion_log", migrate: v4_deletion_log)
         migrator.registerMigration("v5_cloud_status", migrate: v5_cloud_status)
         migrator.registerMigration("v6_album_store_info", migrate: v6_album_store_info)
+        migrator.registerMigration("v7_has_artwork", migrate: v7_has_artwork)
     }
 
     // ── v1: schema principale ─────────────────────────────────────────────────
@@ -174,6 +175,15 @@ public enum Migrations {
                 // "pending" | "found" | "notFound" | "multiDisc"
             t.column("fetchedAt", .datetime).notNull()
         }
+    }
+
+    // ── v7: presenza copertina ────────────────────────────────────────────────
+    private static func v7_has_artwork(_ db: Database) throws {
+        try db.alter(table: "track") { t in
+            // NULL = non ancora scansionato, 0 = assente, 1 = presente
+            t.add(column: "hasArtwork", .integer)
+        }
+        try db.create(index: "track_has_artwork", on: "track", columns: ["hasArtwork"])
     }
 
     // ── v1_fts5: ricerca full-text ─────────────────────────────────────────────

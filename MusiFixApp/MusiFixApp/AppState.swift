@@ -71,6 +71,47 @@ final class AppState: ObservableObject {
         }
     }
 
+    func startArtworkScan() {
+        guard !isIndexing else { return }
+        isIndexing = true
+        indexTask = Task {
+            do {
+                let n = try await indexService.scanArtworkPresence()
+                print("Scansione copertine completata: \(n) brani")
+            }
+            catch is CancellationError { print("Scansione copertine annullata") }
+            catch { print("Artwork scan error: \(error)") }
+            await MainActor.run { self.isIndexing = false }
+        }
+        Task {
+            for await progress in await indexService.progressStream() {
+                self.indexProgress = progress
+            }
+        }
+    }
+
+    /// Recupera la location reale da Music per i brani marcati cloud-only
+    /// (file non trovato dall'euristica filesystem) e li rende editabili.
+    /// Molto più rapido di un re-index completo.
+    func startRepairCloudOnly() {
+        guard !isIndexing else { return }
+        isIndexing = true
+        indexTask = Task {
+            do {
+                let n = try await indexService.repairCloudOnlyLocations()
+                print("Riparati \(n) brani cloud-only")
+            }
+            catch is CancellationError { print("Riparazione annullata dall'utente") }
+            catch { print("Repair error: \(error)") }
+            await MainActor.run { self.isIndexing = false }
+        }
+        Task {
+            for await progress in await indexService.progressStream() {
+                self.indexProgress = progress
+            }
+        }
+    }
+
     /// Annulla l'indicizzazione/sync in corso. La cancellazione è cooperativa:
     /// viene raccolta tra un blocco e il successivo nel fetch da Music.app,
     /// non istantaneamente.

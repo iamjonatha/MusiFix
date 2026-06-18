@@ -18,6 +18,9 @@ struct ContentView: View {
 
     enum ViewMode { case tracks, albums }
     @State private var showDivergence = false
+    @State private var showEditor = true
+    @State private var availableGenres: [String] = []
+    @State private var availableAddedYears: [Int] = []
     @State private var markSinglePIDs: [String] = []
     @State private var showMarkSingleConfirm = false
     @State private var setPosition1of1PIDs: [String] = []
@@ -95,6 +98,12 @@ struct ContentView: View {
                 Button("Sync") { appState.startIncrementalSync() }
                     .disabled(appState.isIndexing)
                     .help("Aggiorna l'indice con le sole tracce aggiunte/modificate/rimosse dall'ultima sincronizzazione.")
+                Button("Ripara cloud-only") { appState.startRepairCloudOnly() }
+                    .disabled(appState.isIndexing)
+                    .help("Recupera da Music la posizione reale dei brani marcati cloud-only (grigi) il cui file è in realtà scaricato, rendendoli di nuovo editabili.")
+                Button("Scansiona copertine") { appState.startArtworkScan() }
+                    .disabled(appState.isIndexing)
+                    .help("Controlla in Music.app quali brani hanno copertina. Operazione lenta (~2 min). Esegui una volta prima di usare il filtro 'Senza copertina'.")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -168,6 +177,73 @@ struct ContentView: View {
 
                 Divider().frame(height: 16)
 
+                // Menu filtro genere
+                Menu {
+                    Button {
+                        browser.filter = .none
+                        browser.loadInitialPage(db: appState.db)
+                    } label: { Label("Tutti i generi", systemImage: "music.note.list") }
+
+                    Divider()
+
+                    ForEach(availableGenres, id: \.self) { g in
+                        Button(g) {
+                            browser.filter = .genre(g)
+                            browser.loadInitialPage(db: appState.db)
+                        }
+                    }
+                } label: {
+                    Label(genreFilterLabel(browser.filter), systemImage: "guitars")
+                        .frame(minWidth: 80, alignment: .leading)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Filtra per genere")
+
+                Divider().frame(height: 16)
+
+                // Menu filtro anno di aggiunta
+                Menu {
+                    Button {
+                        browser.filter = .none
+                        browser.loadInitialPage(db: appState.db)
+                    } label: { Label("Tutti gli anni", systemImage: "calendar") }
+
+                    Divider()
+
+                    ForEach(availableAddedYears, id: \.self) { y in
+                        Button(String(y)) {
+                            browser.filter = .addedYear(y)
+                            browser.loadInitialPage(db: appState.db)
+                        }
+                    }
+                } label: {
+                    Label(dateFilterLabel(browser.filter), systemImage: "calendar")
+                        .frame(minWidth: 70, alignment: .leading)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Filtra per anno di aggiunta")
+
+                Divider().frame(height: 16)
+
+                // Filtro senza copertina
+                Button {
+                    if browser.filter == .missingArtwork {
+                        browser.filter = .none
+                    } else {
+                        browser.filter = .missingArtwork
+                    }
+                    browser.loadInitialPage(db: appState.db)
+                } label: {
+                    Image(systemName: "photo.badge.exclamationmark")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(browser.filter == .missingArtwork ? Color.accentColor : Color.secondary)
+                .help("Filtra brani senza copertina (richiede 'Scansiona copertine')")
+
+                Divider().frame(height: 16)
+
                 Button {
                     showDisplaySettings.toggle()
                 } label: {
@@ -178,6 +254,17 @@ struct ContentView: View {
                 .popover(isPresented: $showDisplaySettings, arrowEdge: .bottom) {
                     TableDisplaySettingsPopover(settings: displaySettings)
                 }
+
+                Divider().frame(height: 16)
+
+                Button {
+                    showEditor.toggle()
+                } label: {
+                    Image(systemName: showEditor ? "info.circle.fill" : "info.circle")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(showEditor ? Color.accentColor : Color.secondary)
+                .help(showEditor ? "Nascondi pannello dettaglio" : "Mostra pannello dettaglio")
             }
             .padding(8)
             .background(Color(nsColor: .textBackgroundColor))
@@ -231,7 +318,7 @@ struct ContentView: View {
                     )
                     .frame(minWidth: 500)
 
-                    if let track = selectedTrack {
+                    if showEditor, let track = selectedTrack {
                         TrackEditorPanel(
                             track: track,
                             appState: appState,
@@ -271,7 +358,15 @@ struct ContentView: View {
             .padding(.vertical, 4)
             .background(.bar)
         }
-        .onAppear { browser.loadInitialPage(db: appState.db) }
+        .onAppear {
+            browser.loadInitialPage(db: appState.db)
+            availableGenres = (try? appState.db.read { db in
+                try TrackDAO.fetchDistinctGenres(in: db)
+            }) ?? []
+            availableAddedYears = (try? appState.db.read { db in
+                try TrackDAO.fetchDistinctAddedYears(in: db)
+            }) ?? []
+        }
         .sheet(isPresented: $showBatchEditor) {
             BatchEditorView(
                 tracks: browser.selectedTracks,
@@ -382,7 +477,18 @@ private func filterLabel(for filter: TrackFilter) -> String {
     case .artist(let a):           return "Artista: \(a)"
     case .album(let a):            return "Album: \(a)"
     case .year(let y):             return "Anno: \(y)"
+    case .addedYear(let y):        return "Aggiunto nel \(y)"
     }
+}
+
+private func genreFilterLabel(_ filter: TrackFilter) -> String {
+    if case .genre(let g) = filter { return g }
+    return "Genere"
+}
+
+private func dateFilterLabel(_ filter: TrackFilter) -> String {
+    if case .addedYear(let y) = filter { return String(y) }
+    return "Anno"
 }
 
 private func cloudFilterLabel(_ filter: TrackFilter) -> String {

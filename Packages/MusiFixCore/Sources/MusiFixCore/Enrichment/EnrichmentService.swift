@@ -140,14 +140,68 @@ public actor EnrichmentService {
 
     // ── Lookup tracce di una collection (Fase E): durate dallo Store ────────────
 
+    // ── Lookup candidati album (Fase G): top-N con anno e conteggio dischi ──────
+
+    public struct AlbumLookupCandidate: Sendable {
+        public let collectionId: Int
+        public let storeTrackCount: Int
+        public let discCount: Int
+        public let collectionName: String
+        public let artistName: String
+        public let year: Int?
+        public let score: Double
+    }
+
+    /// Restituisce i top-N candidati album su iTunes, ordinati per score.
+    /// Permette di scegliere l'edizione corretta prima di proporre i numeri (Fase G).
+    public func lookupAlbumCandidates(albumArtist: String, album: String, limit: Int = 8) async throws -> [AlbumLookupCandidate] {
+        await albumScanRate.wait()
+
+        var components = URLComponents(string: "https://itunes.apple.com/search")!
+        components.queryItems = [
+            URLQueryItem(name: "term",   value: "\(albumArtist) \(album)"),
+            URLQueryItem(name: "entity", value: "album"),
+            URLQueryItem(name: "media",  value: "music"),
+            URLQueryItem(name: "limit",  value: "\(min(limit, 25))"),
+        ]
+        guard let url = components.url else { return [] }
+
+        let (data, response) = try await session.data(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw EnrichmentError.downloadFailed(url)
+        }
+        let decoded = try JSONDecoder().decode(iTunesSearchResponse.self, from: data)
+
+        return decoded.results.compactMap { r -> AlbumLookupCandidate? in
+            guard let cid = r.collectionId, let count = r.trackCount, count > 0 else { return nil }
+            let artistSim = tokenSimilarity(albumArtist, r.artistName ?? "")
+            let albumSim  = tokenSimilarity(album,       r.collectionName ?? "")
+            let score = artistSim * 0.4 + albumSim * 0.6
+            guard score >= 0.3 else { return nil }
+            return AlbumLookupCandidate(
+                collectionId: cid,
+                storeTrackCount: count,
+                discCount: r.discCount ?? 1,
+                collectionName: r.collectionName ?? album,
+                artistName: r.artistName ?? albumArtist,
+                year: r.releaseDate.flatMap { parseYear($0) },
+                score: score
+            )
+        }
+        .sorted { $0.score > $1.score }
+    }
+
     public struct StoreTrack: Sendable {
         public let trackName: String
         public let trackNumber: Int
+        public let trackCount: Int
+        public let discNumber: Int
+        public let discCount: Int
         public let durationSeconds: Double   // da trackTimeMillis
     }
 
     /// Recupera le tracce di una collection iTunes (via `lookup?id=…&entity=song`),
-    /// con nome, numero e durata. Usa il rate limiter conservativo.
+    /// con nome, numero, disco e durata. Usa il rate limiter conservativo.
     public func lookupCollectionTracks(collectionId: Int) async throws -> [StoreTrack] {
         await albumScanRate.wait()
 
@@ -170,6 +224,9 @@ public actor EnrichmentService {
             return StoreTrack(
                 trackName: name,
                 trackNumber: r.trackNumber ?? 0,
+                trackCount: r.trackCount ?? 0,
+                discNumber: r.discNumber ?? 1,
+                discCount: r.discCount ?? 1,
                 durationSeconds: Double(ms) / 1000.0
             )
         }
@@ -334,6 +391,7 @@ private struct iTunesAlbum: Codable {
     let releaseDate: String?
     let collectionId: Int?
     let trackCount: Int?
+    let discCount: Int?
 }
 
 // ── Codable iTunes lookup (entity=song) ─────────────────────────────────────────
@@ -346,6 +404,9 @@ private struct iTunesSong: Codable {
     let wrapperType: String?
     let trackName: String?
     let trackNumber: Int?
+    let trackCount: Int?
+    let discNumber: Int?
+    let discCount: Int?
     let trackTimeMillis: Int?
 }
 

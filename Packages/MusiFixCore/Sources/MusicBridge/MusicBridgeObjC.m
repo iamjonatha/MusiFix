@@ -262,18 +262,36 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
 
 // ─── revealInMusic ────────────────────────────────────────────────────────────
 
+/// Cerca il brano nella library playlist, non in `every track`:
+/// equivalente all'AppleScript `first track of library playlist 1 whose persistent ID is "..."`.
+- (nullable MusicTrack *)trackForReveal:(NSString *)pid {
+    MusicSource *src = [self librarySource];
+    if (!src) return nil;
+    SBElementArray<MusicLibraryPlaylist *> *playlists = [src libraryPlaylists];
+    MusicLibraryPlaylist *lib = playlists.count > 0 ? playlists[0] : nil;
+    if (!lib) return nil;
+    NSPredicate *pred = [NSPredicate predicateWithFormat:@"persistentID == %@", pid];
+    SBElementArray<MusicTrack *> *filtered =
+        (SBElementArray<MusicTrack *> *)[[lib tracks] filteredArrayUsingPredicate:pred];
+    return filtered.count > 0 ? filtered[0] : nil;
+}
+
 - (BOOL)revealInMusicForPersistentID:(NSString *)pid error:(NSError **)error {
     @try {
-        MusicTrack *t = [self trackWithPersistentID:pid];
+        MusicTrack *t = [self trackForReveal:pid];
         if (!t) {
-            if (error) *error = bridgeError(3, [NSString stringWithFormat:@"Track non trovato: %@", pid]);
+            NSString *msg = [NSString stringWithFormat:@"Track non trovato per reveal: %@", pid];
+            NSLog(@"[MusicBridge] %@", msg);
+            if (error) *error = bridgeError(3, msg);
             return NO;
         }
         [_app reveal:t];
         [_app activate];
         return YES;
     } @catch (NSException *ex) {
-        if (error) *error = bridgeError(10, ex.reason ?: @"Eccezione reveal in Music");
+        NSString *msg = ex.reason ?: @"Eccezione reveal in Music";
+        NSLog(@"[MusicBridge] revealInMusic eccezione: %@", msg);
+        if (error) *error = bridgeError(10, msg);
         return NO;
     }
 }

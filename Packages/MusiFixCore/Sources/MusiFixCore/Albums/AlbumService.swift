@@ -257,6 +257,255 @@ public actor AlbumService {
         )
     }
 
+    // ── Fase G: allineamento numeri traccia/disco da Store ──────────────────────
+
+    public enum TrackMatchConfidence: String, Sendable {
+        case high       // verde: pre-spuntata
+        case medium     // arancione: da rivedere
+        case uncertain  // rosso: richiede conferma
+        case unmatched  // rosso: nessun match, campi vuoti da compilare a mano
+    }
+
+    public struct PositionProposal: Sendable, Identifiable {
+        public var id: String { persistentID }
+        public let persistentID: String
+        public let trackName: String
+        // Valori correnti nel DB
+        public let currentTrackNumber: Int
+        public let currentTrackCount: Int
+        public let currentDiscNumber: Int
+        public let currentDiscCount: Int
+        // Proposta (editabile dalla UI)
+        public var proposedTrackNumber: Int?
+        public var proposedTrackCount: Int?
+        public var proposedDiscNumber: Int?
+        public var proposedDiscCount: Int?
+        // Diagnostica
+        public let matchedStoreName: String?
+        public let similarity: Double
+        public let confidence: TrackMatchConfidence
+    }
+
+    public struct AlbumAlignment: Sendable {
+        public let album: AlbumGroup
+        public let candidate: EnrichmentService.AlbumLookupCandidate
+        public let proposals: [PositionProposal]
+    }
+
+    /// Propone l'allineamento numeri per tutte le tracce di `album` rispetto
+    /// all'edizione `candidate` recuperata da Store.
+    /// Match 1:1 greedy per titolo (metrica ibrida disc-aware).
+    public func proposeAlbumPositions(
+        for album: AlbumGroup,
+        candidate: EnrichmentService.AlbumLookupCandidate
+    ) async throws -> AlbumAlignment {
+        let storeTracks = try await enrichment.lookupCollectionTracks(collectionId: candidate.collectionId)
+        let localTracks: [DBTrack] = try db.read { db in
+            try album.pids.compactMap { try TrackDAO.fetch(persistentID: $0, in: db) }
+        }
+        // Ordine display: per-disco poi per-traccia (valori correnti, potrebbero essere 0)
+        let sorted = localTracks.sorted {
+            ($0.discNumber, $0.trackNumber, $0.name.lowercased())
+                < ($1.discNumber, $1.trackNumber, $1.name.lowercased())
+        }
+
+        // Costruiamo la matrice similarità e facciamo il match greedy 1:1
+        struct Pair { let lIdx: Int; let sIdx: Int; let sim: Double; let secondBest: Double }
+        var pairs: [Pair] = []
+        for (lIdx, local) in sorted.enumerated() {
+            let coreLocal = trackTitleCore(local.name)
+            var scores: [(sIdx: Int, sim: Double)] = []
+            for (sIdx, store) in storeTracks.enumerated() {
+                let sim = hybridTitleSimilarity(coreLocal, trackTitleCore(store.trackName))
+                scores.append((sIdx, sim))
+            }
+            scores.sort { $0.sim > $1.sim }
+            let best = scores.first?.sim ?? 0
+            let second = scores.dropFirst().first?.sim ?? 0
+            if best > 0, let top = scores.first {
+                pairs.append(Pair(lIdx: lIdx, sIdx: top.sIdx, sim: best, secondBest: second))
+            }
+        }
+        // Greedy: ordine score decrescente, ogni store track usato una volta
+        pairs.sort { $0.sim > $1.sim }
+        var usedLocal = Set<Int>(); var usedStore = Set<Int>()
+        var assignment: [Int: (sIdx: Int, sim: Double, secondBest: Double)] = [:]
+        for p in pairs {
+            if usedLocal.contains(p.lIdx) || usedStore.contains(p.sIdx) { continue }
+            assignment[p.lIdx] = (p.sIdx, p.sim, p.secondBest)
+            usedLocal.insert(p.lIdx); usedStore.insert(p.sIdx)
+        }
+
+        // Calcola trackCount per-disco dallo store
+        var trackCountPerDisc: [Int: Int] = [:]
+        for s in storeTracks {
+            let d = s.discNumber
+            let tc = s.trackCount > 0 ? s.trackCount : (storeTracks.filter { $0.discNumber == d }.map(\.trackNumber).max() ?? 0)
+            trackCountPerDisc[d] = max(trackCountPerDisc[d] ?? 0, tc)
+        }
+        let storeDiscCount = storeTracks.map(\.discCount).max() ?? 1
+
+        // Post-pass: rileva duplicati (disco,traccia) proposti
+        var proposedPositions = Set<String>()
+        var duplicateLocalIdxs = Set<Int>()
+        for (lIdx, match) in assignment {
+            let s = storeTracks[match.sIdx]
+            let key = "\(s.discNumber):\(s.trackNumber)"
+            if proposedPositions.contains(key) {
+                duplicateLocalIdxs.insert(lIdx)
+            } else {
+                proposedPositions.insert(key)
+            }
+        }
+
+        // Assembla i proposal
+        var proposals: [PositionProposal] = sorted.enumerated().map { (lIdx, local) in
+            if let match = assignment[lIdx], !duplicateLocalIdxs.contains(lIdx) {
+                let store = storeTracks[match.sIdx]
+                let s = match.sim
+                let delta = s - match.secondBest
+                let qualLocal = hasQualifier(local.name)
+                let qualStore = hasQualifier(store.trackName)
+                let qualMismatch = qualLocal != qualStore
+                let mutual: Bool = {
+                    // il match store ha scelto questo local come suo best?
+                    var bestForStore: (lIdx: Int, sim: Double)?
+                    for (l2, m2) in assignment where m2.sIdx == match.sIdx {
+                        if bestForStore == nil || m2.sim > bestForStore!.sim { bestForStore = (l2, m2.sim) }
+                    }
+                    return bestForStore?.lIdx == lIdx
+                }()
+                let confidence: TrackMatchConfidence
+                if s >= 0.80 && (delta >= 0.25 || mutual) && !qualMismatch {
+                    confidence = .high
+                } else if s >= 0.55 {
+                    confidence = .medium
+                } else {
+                    confidence = .uncertain
+                }
+                let tc = trackCountPerDisc[store.discNumber] ?? store.trackCount
+                return PositionProposal(
+                    persistentID: local.persistentID,
+                    trackName: local.name,
+                    currentTrackNumber: local.trackNumber,
+                    currentTrackCount: local.trackCount,
+                    currentDiscNumber: local.discNumber,
+                    currentDiscCount: local.discCount,
+                    proposedTrackNumber: store.trackNumber > 0 ? store.trackNumber : nil,
+                    proposedTrackCount: tc > 0 ? tc : nil,
+                    proposedDiscNumber: store.discNumber,
+                    proposedDiscCount: storeDiscCount,
+                    matchedStoreName: store.trackName,
+                    similarity: s,
+                    confidence: confidence
+                )
+            } else {
+                return PositionProposal(
+                    persistentID: local.persistentID,
+                    trackName: local.name,
+                    currentTrackNumber: local.trackNumber,
+                    currentTrackCount: local.trackCount,
+                    currentDiscNumber: local.discNumber,
+                    currentDiscCount: local.discCount,
+                    proposedTrackNumber: nil,
+                    proposedTrackCount: nil,
+                    proposedDiscNumber: nil,
+                    proposedDiscCount: nil,
+                    matchedStoreName: nil,
+                    similarity: 0,
+                    confidence: duplicateLocalIdxs.contains(lIdx) ? .uncertain : .unmatched
+                )
+            }
+        }
+
+        // Riordina per (disco proposto, traccia proposta, nome)
+        proposals.sort {
+            let d0 = $0.proposedDiscNumber ?? 99, d1 = $1.proposedDiscNumber ?? 99
+            let t0 = $0.proposedTrackNumber ?? 999, t1 = $1.proposedTrackNumber ?? 999
+            return (d0, t0, $0.trackName.lowercased()) < (d1, t1, $1.trackName.lowercased())
+        }
+        return AlbumAlignment(album: album, candidate: candidate, proposals: proposals)
+    }
+
+    /// Scrive i numeri proposti (solo le tracce con tutti e 4 i valori valorizzati).
+    /// Undo automatico via operation_log.
+    public func writeProposedPositions(_ proposals: [PositionProposal]) async throws -> WriteResult {
+        let items: [(TrackMetadataUpdate, String)] = proposals.compactMap { p in
+            guard let tn = p.proposedTrackNumber, let tc = p.proposedTrackCount,
+                  let dn = p.proposedDiscNumber,  let dc = p.proposedDiscCount
+            else { return nil }
+            var u = TrackMetadataUpdate()
+            u.trackNumber = tn; u.trackCount = tc
+            u.discNumber  = dn; u.discCount  = dc
+            return (u, p.persistentID)
+        }
+        guard !items.isEmpty else {
+            return WriteResult(batchID: UUID().uuidString, succeeded: [], failed: [])
+        }
+        return try await writeService.writeBatch(items)
+    }
+
+    // ── Helpers matching Fase G ──────────────────────────────────────────────────
+
+    /// Normalizza un titolo di traccia: fold diacritici, strip qualificatori
+    /// tra parentesi/quadre, suffissi dopo " - ", feat./ft./with.
+    /// Ritorna il core minuscolo senza punteggiatura.
+    private func trackTitleCore(_ s: String) -> String {
+        var t = s.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        // strip (...) e [...]
+        t = t.replacing(#/\([^)]*\)/#, with: "")
+        t = t.replacing(#/\[[^\]]*\]/#, with: "")
+        // strip tutto dopo " - "
+        if let r = t.range(of: " - ") { t = String(t[..<r.lowerBound]) }
+        // strip feat./ft./with ...
+        t = t.replacing(#/\s+(feat|ft|with)\b.*$/#, with: "")
+        // normalizza & -> and, rimuovi punteggiatura residua
+        t = t.replacingOccurrences(of: "&", with: "and")
+        t = t.replacingOccurrences(of: "'", with: "")
+        // tokenizza e riunisci (rimuove spazi multipli)
+        let tokens = t.components(separatedBy: .whitespacesAndNewlines.union(.punctuationCharacters))
+                      .filter { !$0.isEmpty }
+        return tokens.joined(separator: " ")
+    }
+
+    /// True se il titolo contiene qualificatori espliciti (Live, Remastered, ecc.).
+    private func hasQualifier(_ s: String) -> Bool {
+        let lower = s.lowercased()
+        return lower.contains("(") || lower.contains("[") ||
+               lower.range(of: #"\s+-\s+"#, options: .regularExpression) != nil
+    }
+
+    /// Similarità ibrida tra due core già normalizzati: max(Jaccard, 1−Levenshtein/maxLen).
+    private func hybridTitleSimilarity(_ a: String, _ b: String) -> Double {
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        let j = jaccardTokens(a, b)
+        let l = 1.0 - Double(levenshtein(a, b)) / Double(max(a.count, b.count))
+        return max(j, l)
+    }
+
+    private func jaccardTokens(_ a: String, _ b: String) -> Double {
+        let ta = Set(a.components(separatedBy: " ").filter { !$0.isEmpty })
+        let tb = Set(b.components(separatedBy: " ").filter { !$0.isEmpty })
+        guard !ta.isEmpty, !tb.isEmpty else { return 0 }
+        return Double(ta.intersection(tb).count) / Double(ta.union(tb).count)
+    }
+
+    private func levenshtein(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        let m = a.count, n = b.count
+        if m == 0 { return n }; if n == 0 { return m }
+        var row = Array(0...n)
+        for i in 1...m {
+            var prev = row[0]; row[0] = i
+            for j in 1...n {
+                let old = row[j]
+                row[j] = a[i-1] == b[j-1] ? prev : 1 + min(prev, row[j], row[j-1])
+                prev = old
+            }
+        }
+        return row[n]
+    }
+
     // ── Fase A: normalizzazione "- Single" ──────────────────────────────────────
 
     /// Appende `" - Single"` al campo `album` delle tracce indicate, scrivendo su Music.
