@@ -62,7 +62,22 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
         // I valori "missing value" vengono coercizzati ad "" in Swift dal parser.
         // `property of (tracks X thru Y of lib)` → UN solo Apple Event per proprietà.
         // NON usare `every item of rangeRef`: crea specifier list invece di liste dati.
+        //
+        // `date added` e `modification date` sono emessi come secondi epoch (stringa)
+        // tramite la sottrazione `d - refDate`: locale-indipendente, a differenza di
+        // `(d as string)` che produce una data localizzata difficile da riparsare.
         let script = """
+        on epochString(d, refDate)
+            if d is missing value then return ""
+            return ((d - refDate) as string)
+        end epochString
+
+        set refDate to current date
+        set day of refDate to 1
+        set month of refDate to January
+        set year of refDate to 1970
+        set time of refDate to 0
+
         tell application "Music"
             set lib to library playlist 1
             set pids  to persistent ID of (tracks \(start) thru \(end) of lib)
@@ -83,10 +98,14 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
             set brs   to bit rate of (tracks \(start) thru \(end) of lib)
             set srs   to sample rate of (tracks \(start) thru \(end) of lib)
             set knds  to kind of (tracks \(start) thru \(end) of lib)
+            set dadds to date added of (tracks \(start) thru \(end) of lib)
+            set mods  to modification date of (tracks \(start) thru \(end) of lib)
+            set csts  to cloud status of (tracks \(start) thru \(end) of lib)
             set output to ""
             set n to count of pids
             repeat with i from 1 to n
                 set row to (item i of pids) as string & tab & (item i of dbids) as string & tab & (item i of nms) as string & tab & (item i of arts) as string & tab & (item i of aarts) as string & tab & (item i of albs) as string & tab & (item i of yrs) as string & tab & (item i of gens) as string & tab & (item i of coms) as string & tab & (item i of comps) as string & tab & (item i of tnums) as string & tab & (item i of tcnts) as string & tab & (item i of dnums) as string & tab & (item i of dcnts) as string & tab & (item i of durs) as string & tab & (item i of brs) as string & tab & (item i of srs) as string & tab & (item i of knds) as string
+                set row to row & tab & my epochString(item i of dadds, refDate) & tab & my epochString(item i of mods, refDate) & tab & ((item i of csts) as string)
                 set output to output & row & return
             end repeat
         end tell
@@ -94,6 +113,76 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
         """
         let raw = try runAppleScript(script)
         return parseTabDelimitedTracks(raw)
+    }
+
+    /// Fetch leggero per il diff del sync incrementale: solo persistentID +
+    /// modification date (epoch). Due proprietà per chunk invece delle ~19 di
+    /// `tracksChunk`: la passata di confronto costa una frazione. I dati completi
+    /// vengono poi richiesti (via `tracksChunk`) solo per i chunk che contengono
+    /// brani nuovi o modificati.
+    public func trackIdentitiesChunk(from start: Int, to end: Int) async throws
+        -> [(persistentID: String, modEpoch: Double?)] {
+        let script = """
+        on epochString(d, refDate)
+            if d is missing value then return ""
+            return ((d - refDate) as string)
+        end epochString
+
+        set refDate to current date
+        set day of refDate to 1
+        set month of refDate to January
+        set year of refDate to 1970
+        set time of refDate to 0
+
+        tell application "Music"
+            set lib to library playlist 1
+            set pids to persistent ID of (tracks \(start) thru \(end) of lib)
+            set mods to modification date of (tracks \(start) thru \(end) of lib)
+            set output to ""
+            set n to count of pids
+            repeat with i from 1 to n
+                set output to output & ((item i of pids) as string) & tab & my epochString(item i of mods, refDate) & return
+            end repeat
+        end tell
+        return output
+        """
+        let raw = try runAppleScript(script)
+        return raw.components(separatedBy: "\r")
+            .filter { !$0.isEmpty }
+            .compactMap { line in
+                let parts = line.components(separatedBy: "\t")
+                guard let pid = parts.first, !pid.isEmpty, pid != "missing value" else { return nil }
+                let epoch: Double? = parts.count >= 2 ? epochDouble(parts[1]) : nil
+                return (pid, epoch)
+            }
+    }
+
+    /// Fetch leggero (persistentID + cloud status) per la scansione on-demand dello
+    /// stato iCloud, senza ri-leggere tutte le proprietà come `tracksChunk`. Due
+    /// proprietà a lista per chunk → veloce anche sull'intera libreria.
+    public func cloudStatusChunk(from start: Int, to end: Int) async throws
+        -> [(persistentID: String, code: String)] {
+        let script = """
+        tell application "Music"
+            set lib to library playlist 1
+            set pids to persistent ID of (tracks \(start) thru \(end) of lib)
+            set csts to cloud status of (tracks \(start) thru \(end) of lib)
+            set output to ""
+            set n to count of pids
+            repeat with i from 1 to n
+                set output to output & ((item i of pids) as string) & tab & ((item i of csts) as string) & return
+            end repeat
+        end tell
+        return output
+        """
+        let raw = try runAppleScript(script)
+        return raw.components(separatedBy: "\r")
+            .filter { !$0.isEmpty }
+            .compactMap { line in
+                let parts = line.components(separatedBy: "\t")
+                guard let pid = parts.first, !pid.isEmpty, pid != "missing value" else { return nil }
+                return (pid, parts.count >= 2 ? cloudCode(parts[1]) : "")
+            }
     }
 
     // ─── Scansione presenza copertina ─────────────────────────────────────────
@@ -132,88 +221,6 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
         return (having, lacking)
     }
 
-    // ─── Risoluzione location autoritativa da Music ────────────────────────
-
-    /// Per i `pids` indicati restituisce il path POSIX reale del file locale
-    /// così come noto a Music.app — la sola fonte di verità affidabile quando
-    /// l'euristica filesystem (Artist/Album/NN) fallisce (compilation, nomi
-    /// sanitizzati, prefissi disco nei filename, ecc.).
-    ///
-    /// Strategia: scansione della libreria per indice a blocchi. Per ogni blocco
-    /// un solo Apple Event recupera la lista dei `persistent ID`; la `location`
-    /// viene poi risolta SOLO per gli indici i cui pid sono richiesti, ognuno
-    /// isolato in `try`/`with timeout` (come `trackMetadata`) così un alias
-    /// irrisolvibile non blocca il resto. I brani senza location locale (cloud/
-    /// streaming reali) semplicemente non compaiono nella mappa restituita.
-    public func locationsForPersistentIDs(_ pids: Set<String>) async throws -> [String: String] {
-        guard !pids.isEmpty else { return [:] }
-        let total = try await trackCount()
-        var result: [String: String] = [:]
-        let chunkSize = 1000
-        var start = 1
-        while start <= total {
-            try Task.checkCancellation()
-            let end = min(start + chunkSize - 1, total)
-
-            // 1) Lista pid del blocco in un solo Apple Event.
-            let pidScript = """
-            tell application "Music"
-                set lib to library playlist 1
-                set output to ""
-                set ps to persistent ID of (tracks \(start) thru \(end) of lib)
-                repeat with p in ps
-                    set output to output & (p as string) & return
-                end repeat
-            end tell
-            return output
-            """
-            let pidRaw = try runAppleScript(pidScript)
-            let chunkPIDs = pidRaw.components(separatedBy: "\r").filter { !$0.isEmpty }
-
-            // 2) Indici (assoluti, 1-based) dei soli brani richiesti.
-            var wantedIndices: [Int] = []
-            for (offset, pid) in chunkPIDs.enumerated() where pids.contains(pid) {
-                wantedIndices.append(start + offset)
-            }
-            if wantedIndices.isEmpty { start = end + 1; continue }
-
-            // 3) Location per gli indici richiesti, isolata per-track.
-            let idxList = wantedIndices.map(String.init).joined(separator: ", ")
-            let locScript = """
-            tell application "Music"
-                set lib to library playlist 1
-                set output to ""
-                repeat with idx in {\(idxList)}
-                    set tPid to ""
-                    set tLoc to ""
-                    try
-                        set t to track idx of lib
-                        set tPid to (persistent ID of t) as string
-                        with timeout of 2 seconds
-                            set locAlias to location of t
-                            if locAlias is not missing value then
-                                set tLoc to (POSIX path of locAlias) as string
-                            end if
-                        end timeout
-                    end try
-                    set output to output & tPid & tab & tLoc & return
-                end repeat
-            end tell
-            return output
-            """
-            let locRaw = try runAppleScript(locScript)
-            for line in locRaw.components(separatedBy: "\r") where !line.isEmpty {
-                let parts = line.components(separatedBy: "\t")
-                guard parts.count >= 2 else { continue }
-                let pid = parts[0]
-                let path = parts[1]
-                if !pid.isEmpty, !path.isEmpty { result[pid] = path }
-            }
-
-            start = end + 1
-        }
-        return result
-    }
 
     // Parser per il fetch bulk (senza location). "missing value" viene emesso da
     // AppleScript quando un campo non ha valore — trattiamo come "" o 0.
@@ -225,6 +232,12 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
                 guard parts.count >= 18 else { return nil }
                 let pid = parts[0]
                 guard !pid.isEmpty, pid != "missing value" else { return nil }
+                // Campi 18/19/20 (date added / modification date / cloud status)
+                // aggiunti dopo: letti solo se presenti, così il parser resta
+                // compatibile con righe legacy.
+                let dateAdded = parts.count > 18 ? dateFromEpoch(parts[18]) : nil
+                let modDate   = parts.count > 19 ? dateFromEpoch(parts[19]) : nil
+                let cloud     = parts.count > 20 ? cloudCode(parts[20]) : ""
                 return Track(
                     persistentID: pid,
                     databaseID: Int(parts[1]) ?? 0,
@@ -244,13 +257,48 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
                     duration: parseLocaleDouble(mv(parts[14])),
                     bitRate: Int(mv(parts[15])) ?? 0,
                     sampleRate: parseLocaleDouble(mv(parts[16])),
-                    kind: mv(parts[17])
+                    kind: mv(parts[17]),
+                    cloudStatus: cloud,
+                    dateAdded: dateAdded,
+                    modificationDate: modDate
                 )
             }
     }
 
+    /// Mappa la keyword inglese di `cloud status` (es. "matched") nel codice 4-char
+    /// atteso da `CloudStatus` e usato dai filtri (es. "kMat"). "" per locale/unknown.
+    private func cloudCode(_ s: String) -> String {
+        switch s.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "purchased":           return "kPur"
+        case "matched":             return "kMat"
+        case "uploaded":            return "kUpl"
+        case "subscription":        return "kSub"
+        case "ineligible":          return "kIne"
+        case "removed":             return "kRem"
+        case "error":               return "kErr"
+        case "duplicate":           return "kDpl"
+        case "no longer available": return "kRdy"
+        case "not uploaded":        return "kNot"
+        default:                    return ""   // unknown / missing value / locale
+        }
+    }
+
     /// Converte "missing value" (stringa emessa da AppleScript) in stringa vuota.
     private func mv(_ s: String) -> String { s == "missing value" ? "" : s }
+
+    /// Converte una stringa di secondi epoch (emessa da `epochString`) in `Date?`.
+    private func dateFromEpoch(_ s: String) -> Date? {
+        guard let secs = epochDouble(s) else { return nil }
+        return Date(timeIntervalSince1970: secs)
+    }
+
+    /// Parsa i secondi epoch emessi da `epochString`; nil se assenti/`missing value`.
+    private func epochDouble(_ s: String) -> Double? {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty, t != "missing value" else { return nil }
+        let secs = parseLocaleDouble(t)
+        return secs != 0 ? secs : nil
+    }
 
     // ─── trackMetadata ──────────────────────────────────────────────────────
 

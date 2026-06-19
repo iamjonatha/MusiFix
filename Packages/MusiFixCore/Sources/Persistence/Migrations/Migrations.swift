@@ -12,6 +12,7 @@ public enum Migrations {
         migrator.registerMigration("v5_cloud_status", migrate: v5_cloud_status)
         migrator.registerMigration("v6_album_store_info", migrate: v6_album_store_info)
         migrator.registerMigration("v7_has_artwork", migrate: v7_has_artwork)
+        migrator.registerMigration("v8_perf_indexes", migrate: v8_perf_indexes)
     }
 
     // ── v1: schema principale ─────────────────────────────────────────────────
@@ -184,6 +185,35 @@ public enum Migrations {
             t.add(column: "hasArtwork", .integer)
         }
         try db.create(index: "track_has_artwork", on: "track", columns: ["hasArtwork"])
+    }
+
+    // ── v8: indici prestazionali + anno di aggiunta materializzato ────────────
+    private static func v8_perf_indexes(_ db: Database) throws {
+        // Colonna materializzata dell'anno di aggiunta a Music. Evita lo strftime
+        // per-riga (non-sargable) nei filtri/menu "anno di aggiunta". Popolata da
+        // DBTrack.init e ri-backfillata qui per le righe già presenti.
+        try db.alter(table: "track") { t in
+            t.add(column: "addedYear", .integer)
+        }
+        try db.execute(sql: """
+            UPDATE track SET addedYear = CAST(strftime('%Y', musicDateAdded) AS INTEGER)
+            WHERE musicDateAdded IS NOT NULL
+            """)
+        try db.create(index: "track_added_year", on: "track", columns: ["addedYear"])
+
+        // Indici compound che coprono l'ORDER BY della tabella browser: senza questi
+        // SQLite riordina l'intera libreria (25k righe) a ogni cambio pagina/sort.
+        // Il sort secondario è sempre [albumNormalized, discNumber, trackNumber].
+        // Coprono anche i filtri .artist/.album e le subquery "valori multipli".
+        try db.create(index: "track_sort_artist", on: "track",
+                      columns: ["artistNormalized", "albumNormalized", "discNumber", "trackNumber"])
+        try db.create(index: "track_sort_album", on: "track",
+                      columns: ["albumNormalized", "discNumber", "trackNumber"])
+
+        // I singoli indici su artistNormalized/albumNormalized sono ora ridondanti
+        // (prefisso dei compound sopra): rimuoverli evita doppio costo in scrittura.
+        try db.execute(sql: "DROP INDEX IF EXISTS track_artist")
+        try db.execute(sql: "DROP INDEX IF EXISTS track_album")
     }
 
     // ── v1_fts5: ricerca full-text ─────────────────────────────────────────────

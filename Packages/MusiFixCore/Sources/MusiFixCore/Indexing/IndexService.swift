@@ -3,6 +3,7 @@ import Persistence
 import GRDB
 import OSLog
 import CommonCrypto
+import AVFoundation
 
 private let log = Logger(subsystem: "it.musifixapp", category: "IndexService")
 
@@ -92,6 +93,12 @@ public actor IndexService {
         var batch: [DBTrack] = []
         batch.reserveCapacity(batchSize)
 
+        // Tutti i persistentID visti in Music in questa passata: serve per il pruning
+        // finale dei brani eliminati da Music (vengono raccolti anche quelli saltati
+        // dal checkpoint, così il pruning è corretto pure su ripresa interrotta).
+        var seenPIDs = Set<String>()
+        seenPIDs.reserveCapacity(total)
+
         var chunkStart = 1
         while chunkStart <= total {
             try Task.checkCancellation()
@@ -109,6 +116,7 @@ public actor IndexService {
             }
 
             for track in chunk {
+                seenPIDs.insert(track.persistentID)
                 if let skip = skipUntilPID {
                     if track.persistentID != skip { continue }
                     skipUntilPID = nil
@@ -139,15 +147,31 @@ public actor IndexService {
                                   processed: processed, total: total)
         }
 
+        // 3b. Pruning: elimina dall'indice i brani non più presenti in Music.
+        // Sicuro solo qui: il ciclo è arrivato in fondo a tutti i chunk senza
+        // cancellazione, quindi `seenPIDs` rappresenta l'intera libreria Music.
+        let dbPIDs: Set<String> = try db.read { db in
+            Set(try String.fetchAll(db, sql: "SELECT persistentID FROM track"))
+        }
+        let removedPIDs = dbPIDs.subtracting(seenPIDs)
+        if !removedPIDs.isEmpty {
+            let snapshot = Array(removedPIDs)
+            try db.write { db in
+                for pid in snapshot { try TrackDAO.delete(persistentID: pid, in: db) }
+            }
+            log.info("Pruning: rimossi \(removedPIDs.count) brani eliminati da Music")
+        }
+
         // 4. Risolvi path via filesystem scan (evita la risoluzione alias HFS+ lenta)
         if let mediaFolder = Self.musicMediaFolderURL() {
             try await resolveLocations(mediaFolder: mediaFolder, total: processed)
         }
 
-        // 5. FTS rebuild (se necessario dopo upsert massivo senza trigger)
-        try rebuildFTSIfNeeded()
+        // I trigger FTS (track_fts_ai/au/ad, vedi migrazione v1_fts5) mantengono
+        // l'indice full-text a ogni INSERT/UPDATE/DELETE del ciclo sopra: nessun
+        // rebuild finale necessario (era lavoro duplicato).
 
-        // 6. Marca sync completata
+        // 5. Marca sync completata
         try db.write { db in
             try SyncStateDAO.setLastMusicSync(Date(), in: db)
             try db.execute(sql: "DELETE FROM indexing_checkpoint")
@@ -165,70 +189,84 @@ public actor IndexService {
         log.info("Avvio sync incrementale")
         setProgress(.init(phase: .fetchingFromMusic, processed: 0, total: 0, lastSyncDate: nil))
 
-        // Snapshot delle modDate note nell'indice
+        // Snapshot delle modDate note nell'indice (persistentID → modDate?).
         let knownModDates = try db.read { db in
             try TrackDAO.fetchModDates(in: db)
         }
 
-        // Tutti i track da Music, a blocchi (vedi nota su bulkFetcher in
-        // runFullIndex: evita 20+ Apple Event per track via ScriptingBridge
-        // e dà progresso/cancellazione reali tra un blocco e il successivo).
         let total = try await bulkFetcher.trackCount()
         setProgress(.init(phase: .fetchingFromMusic, processed: 0, total: total, lastSyncDate: nil))
 
-        var musicTracks: [Track] = []
-        musicTracks.reserveCapacity(total)
+        // Passata leggera a blocchi: per ogni chunk leggiamo solo (pid, modDate) via
+        // trackIdentitiesChunk e decidiamo quali brani sono nuovi/modificati. Solo i
+        // chunk "sporchi" (con almeno un brano da aggiornare) vengono ri-letti per
+        // intero con tracksChunk. Un sync con pochi cambiamenti costa così ~2
+        // proprietà × N chunk invece di ~19 × N. Il rilevamento delle modifiche ora
+        // funziona davvero: prima la modification date non veniva nemmeno letta dal
+        // fetch bulk, quindi solo nuovi/rimossi venivano rilevati.
+        var musicPIDs = Set<String>()
+        musicPIDs.reserveCapacity(total)
+        var toUpsert: [DBTrack] = []
+        var added = 0
+        var updated = 0
+        let tolerance = 1.0   // s: assorbe l'arrotondamento epoch lato AppleScript
+
         let chunkSize = 1000
         var chunkStart = 1
+        var scanned = 0
         while chunkStart <= total {
             try Task.checkCancellation()
             let chunkEnd = min(chunkStart + chunkSize - 1, total)
-            musicTracks.append(contentsOf: try await bulkFetcher.tracksChunk(from: chunkStart, to: chunkEnd))
-            chunkStart = chunkEnd + 1
-            setProgress(.init(phase: .fetchingFromMusic, processed: musicTracks.count, total: total, lastSyncDate: nil))
-        }
+            let idents = try await bulkFetcher.trackIdentitiesChunk(from: chunkStart, to: chunkEnd)
 
-        var updated = 0
-        var added = 0
-        var removed = 0
-
-        // Track nuovi o modificati
-        var toUpsert: [DBTrack] = []
-        let musicPIDs = Set(musicTracks.map { $0.persistentID })
-
-        for track in musicTracks {
-            try Task.checkCancellation()
-            let knownModDate = knownModDates[track.persistentID]
-            if knownModDate == nil {
-                // Nuovo
-                toUpsert.append(await buildDBTrack(from: track))
-                added += 1
-            } else if let musicMod = track.modificationDate,
-                      let known = knownModDate ?? nil,
-                      musicMod > known {
-                // Modificato
-                toUpsert.append(await buildDBTrack(from: track))
-                updated += 1
+            var dirtyPIDs = Set<String>()
+            for (pid, modEpoch) in idents {
+                musicPIDs.insert(pid)
+                guard let known = knownModDates[pid] else {
+                    dirtyPIDs.insert(pid)            // assente nell'indice → nuovo
+                    continue
+                }
+                guard let storedDate = known else {
+                    // Riga legacy senza modDate (indicizzata prima di questa modifica):
+                    // ri-leggila una volta per popolarla; i sync successivi la salteranno
+                    // finché non cambia davvero.
+                    dirtyPIDs.insert(pid)
+                    continue
+                }
+                if let modEpoch, modEpoch - storedDate.timeIntervalSince1970 > tolerance {
+                    dirtyPIDs.insert(pid)            // modificato
+                }
             }
+
+            if !dirtyPIDs.isEmpty {
+                let full = try await bulkFetcher.tracksChunk(from: chunkStart, to: chunkEnd)
+                for track in full where dirtyPIDs.contains(track.persistentID) {
+                    if knownModDates[track.persistentID] == nil { added += 1 } else { updated += 1 }
+                    toUpsert.append(await buildDBTrack(from: track))
+                }
+            }
+
+            scanned += idents.count
+            chunkStart = chunkEnd + 1
+            setProgress(.init(phase: .fetchingFromMusic, processed: scanned, total: total, lastSyncDate: nil))
         }
 
         // Track rimossi da Music
         let removedPIDs = Set(knownModDates.keys).subtracting(musicPIDs)
-        removed = removedPIDs.count
+        let removed = removedPIDs.count
 
-        // Applica delta — snapshot locale per Sendable closure
+        // Applica delta — snapshot locale per Sendable closure. Scriviamo sempre, anche
+        // a delta vuoto, per aggiornare la data di ultima sync.
         let upsertSnapshot = toUpsert
         let removedSnapshot = removedPIDs
-        if !upsertSnapshot.isEmpty || !removedSnapshot.isEmpty {
-            try db.write { db in
-                for track in upsertSnapshot {
-                    try TrackDAO.upsert(track, in: db)
-                }
-                for pid in removedSnapshot {
-                    try TrackDAO.delete(persistentID: pid, in: db)
-                }
-                try SyncStateDAO.setLastMusicSync(Date(), in: db)
+        try db.write { db in
+            for track in upsertSnapshot {
+                try TrackDAO.upsert(track, in: db)
             }
+            for pid in removedSnapshot {
+                try TrackDAO.delete(persistentID: pid, in: db)
+            }
+            try SyncStateDAO.setLastMusicSync(Date(), in: db)
         }
 
         let syncDate = Date()
@@ -236,7 +274,7 @@ public actor IndexService {
         setProgress(.init(
             phase: .done,
             processed: added + updated + removed,
-            total: musicTracks.count,
+            total: total,
             lastSyncDate: syncDate
         ))
     }
@@ -266,85 +304,66 @@ public actor IndexService {
         setProgress(.init(phase: .resolvingLocations(resolved: 0, total: total),
                           processed: 0, total: total, lastSyncDate: nil))
 
-        let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "flac", "aiff", "aif", "wav", "alac", "ogg", "opus", "wma"]
-
-        // Scansione filesystem in Task.detached: DirectoryEnumerator non è Sendable
-        // in contesti async. Costruisce indice (artist_folder, album_folder, trackNum) → path.
-        let mediaFolderPath = mediaFolder.path
-        let fileIndex: [String: String] = await Task.detached(priority: .userInitiated) {
-            var idx: [String: String] = [:]
-            guard let enumerator = FileManager.default.enumerator(
-                at: URL(fileURLWithPath: mediaFolderPath),
-                includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles, .skipsPackageDescendants]
-            ) else { return idx }
-            while let fileURL = enumerator.nextObject() as? URL {
-                let ext = fileURL.pathExtension.lowercased()
-                guard audioExtensions.contains(ext) else { continue }
-                guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
-                let filename = fileURL.deletingPathExtension().lastPathComponent
-                let trackNum = IndexService.parseLeadingTrackNumber(from: filename)
-                let albumFolder = fileURL.deletingLastPathComponent().lastPathComponent
-                let artistFolder = fileURL.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
-                let key = IndexService.locationKey(artist: artistFolder, album: albumFolder, trackNum: trackNum)
-                if idx[key] == nil { idx[key] = fileURL.path }
-            }
-            return idx
-        }.value
-        log.info("File audio trovati nell'indice: \(fileIndex.count)")
+        let indexes = await Self.buildMediaIndexes(mediaFolderPath: mediaFolder.path)
+        log.info("File audio trovati nell'indice: \(indexes.byArtistAlbumTrack.count)")
 
         // Carica dal DB i brani senza path. Include anche quelli marcati isCloudOnly=1
         // da una sync precedente: il flag potrebbe essere stale (es. brano abbinato/
         // caricato che è stato poi scaricato localmente). Il filesystem è la fonte di
         // verità: se il file c'è → locale; se non c'è → cloud-only.
         struct TrackRow: Sendable {
-            let pid: String; let artist: String; let albumArtist: String
-            let album: String; let trackNum: Int
+            let pid: String; let name: String; let artist: String; let albumArtist: String
+            let album: String; let trackNum: Int; let duration: Double
         }
         let tracksToResolve: [TrackRow] = try db.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT persistentID, artist, albumArtist, album, trackNumber
+                SELECT persistentID, name, artist, albumArtist, album, trackNumber, duration
                 FROM track WHERE locationPath IS NULL
                 """)
                 .map { TrackRow(pid: $0["persistentID"] ?? "",
+                                name: $0["name"] ?? "",
                                 artist: $0["artist"] ?? "",
                                 albumArtist: $0["albumArtist"] ?? "",
                                 album: $0["album"] ?? "",
-                                trackNum: $0["trackNumber"] ?? 0) }
+                                trackNum: $0["trackNumber"] ?? 0,
+                                duration: $0["duration"] ?? 0) }
         }
 
         var updates: [(pid: String, path: String)] = []
+        var resolvedPIDs = Set<String>()
         for t in tracksToResolve {
             // Music.app usa albumArtist come cartella artista per le compilation
             let folderArtist = t.albumArtist.isEmpty ? t.artist : t.albumArtist
-            if let path = fileIndex[Self.locationKey(artist: folderArtist, album: t.album, trackNum: t.trackNum)] {
-                updates.append((t.pid, path)); continue
-            }
-            if let path = fileIndex[Self.locationKey(artist: t.artist, album: t.album, trackNum: t.trackNum)] {
-                updates.append((t.pid, path))
+            if let path = indexes.byArtistAlbumTrack[Self.locationKey(artist: folderArtist, album: t.album, trackNum: t.trackNum)]
+                ?? indexes.byArtistAlbumTrack[Self.locationKey(artist: t.artist, album: t.album, trackNum: t.trackNum)] {
+                updates.append((t.pid, path)); resolvedPIDs.insert(t.pid)
             }
         }
-        log.info("Path risolti via filesystem: \(updates.count)/\(tracksToResolve.count)")
+        log.info("Path risolti via euristica Artista/Album/NN: \(updates.count)/\(tracksToResolve.count)")
 
-        // Brani non trovati dall'euristica filesystem. L'euristica fallisce su
-        // strutture che non seguono Artist/Album/NN: compilation (cartella
-        // Compilations), nomi sanitizzati da Music (es. "...Adriano" → "_..Adriano",
-        // apostrofi curvi), prefissi disco nei filename ("1-08"), trackNumber=0.
-        // Per questi chiediamo a Music.app la location reale: è la sola fonte di
-        // verità affidabile. Solo i brani per cui Music NON restituisce un file
-        // locale sono davvero cloud-only.
-        var resolvedPIDs = Set(updates.map(\.pid))
-        let heuristicUnresolved = tracksToResolve.map(\.pid).filter { !resolvedPIDs.contains($0) }
-
-        if !heuristicUnresolved.isEmpty {
-            log.info("Recovery location da Music per \(heuristicUnresolved.count) brani non risolti dall'euristica")
-            let musicPaths = (try? await bulkFetcher.locationsForPersistentIDs(Set(heuristicUnresolved))) ?? [:]
-            log.info("Location recuperate da Music: \(musicPaths.count)/\(heuristicUnresolved.count)")
-            for (pid, path) in musicPaths where FileManager.default.fileExists(atPath: path) {
-                updates.append((pid, path))
-                resolvedPIDs.insert(pid)
-            }
+        // Brani non trovati dall'euristica esatta: layout non standard (compilation
+        // sotto Compilations/, singoli sciolti Artista/Titolo, nomi sanitizzati da
+        // Music, prefissi disco "1-08") o brani della Libreria iCloud (`shared track`)
+        // per cui Music non espone `location` via AppleScript. Per tutti questi il
+        // match per TITOLO sul filesystem è l'unica via affidabile (la `location` di
+        // Music è lenta/bloccante su volumi esterni e vuota per gli shared track).
+        // Durate dei file nei bucket di titolo ambigui, per separare gli omonimi.
+        var ambiguousPaths = Set<String>()
+        for t in tracksToResolve where !resolvedPIDs.contains(t.pid) {
+            let bucket = indexes.byTitle[Self.normKey(t.name)] ?? []
+            if bucket.count > 1 { for e in bucket { ambiguousPaths.insert(e.path) } }
         }
+        let fileDurations = await Self.readDurations(paths: ambiguousPaths)
+
+        for t in tracksToResolve where !resolvedPIDs.contains(t.pid) {
+            guard let path = Self.matchAudioFile(name: t.name, artist: t.artist,
+                                                 albumArtist: t.albumArtist, album: t.album,
+                                                 trackNum: t.trackNum, duration: t.duration,
+                                                 in: indexes.byTitle, fileDurations: fileDurations),
+                  FileManager.default.fileExists(atPath: path) else { continue }
+            updates.append((t.pid, path)); resolvedPIDs.insert(t.pid)
+        }
+        log.info("Path totali risolti via filesystem: \(updates.count)/\(tracksToResolve.count)")
 
         // Quel che resta senza path è cloud-only reale.
         let unresolvedPIDs = tracksToResolve.map(\.pid).filter { !resolvedPIDs.contains($0) }
@@ -440,33 +459,114 @@ public actor IndexService {
         return scanned
     }
 
+    // ── Scansione stato iCloud (cloudStatus) ──────────────────────────────────
+
+    /// Popola la colonna `cloudStatus` leggendo lo stato iCloud reale da Music
+    /// (Abbinato/Caricato/Acquistato/Apple Music/…). Veloce: solo persistentID +
+    /// cloud status a blocchi (~1 Apple Event per proprietà per chunk). Necessaria
+    /// perché il fetch bulk storico non popolava il campo; va rieseguita dopo
+    /// cambi di stato lato Apple Music. Le nuove indicizzazioni complete lo
+    /// includono già automaticamente.
+    @discardableResult
+    public func scanCloudStatus() async throws -> Int {
+        let total = try await bulkFetcher.trackCount()
+        log.info("Scansione stato cloud avviata: \(total) brani")
+        setProgress(.init(phase: .enrichingFiles(completed: 0, total: total),
+                          processed: 0, total: total, lastSyncDate: nil))
+
+        let chunkSize = 1000
+        var start = 1
+        var scanned = 0
+        while start <= total {
+            try Task.checkCancellation()
+            let end = min(start + chunkSize - 1, total)
+            let rows = try await bulkFetcher.cloudStatusChunk(from: start, to: end)
+            let snapshot = rows
+            try db.write { db in
+                for (pid, code) in snapshot {
+                    try db.execute(sql: "UPDATE track SET cloudStatus=? WHERE persistentID=?",
+                                   arguments: [code, pid])
+                }
+            }
+            scanned += rows.count
+            start = end + 1
+            setProgress(.init(phase: .enrichingFiles(completed: scanned, total: total),
+                              processed: scanned, total: total, lastSyncDate: nil))
+        }
+        log.info("Scansione stato cloud completata: \(scanned) brani")
+        setProgress(.init(phase: .done, processed: scanned, total: total, lastSyncDate: nil))
+        return scanned
+    }
+
     // ── Riparazione mirata brani marcati cloud-only ───────────────────────────
 
-    /// Recupera la location reale da Music.app per i brani attualmente marcati
-    /// `isCloudOnly` (file non trovato dall'euristica filesystem). Più veloce di
-    /// un re-index completo: non rifà il fetch dei 25k brani, agisce solo sul
-    /// sottoinsieme cloud-only. I brani per cui Music restituisce un file locale
-    /// esistente tornano editabili; gli altri restano cloud-only (cloud reali).
+    /// Recupera la location reale per i brani attualmente marcati `isCloudOnly`
+    /// (file non trovato dall'euristica filesystem). Più veloce di un re-index
+    /// completo: non rifà il fetch dei 25k brani, agisce solo sul sottoinsieme
+    /// cloud-only. I brani il cui file viene ritrovato sul disco tornano
+    /// editabili; gli altri restano cloud-only (cloud reali).
+    ///
+    /// Usa la scansione filesystem (come `resolveLocations`) e NON la risoluzione
+    /// degli alias di Music (`location of t`): quest'ultima si blocca su volumi
+    /// esterni con catalogo inconsistente (FSFindFolder -43 / FileIDTree -35).
     @discardableResult
     public func repairCloudOnlyLocations() async throws -> Int {
-        let cloudPIDs: [String] = try db.read { db in
-            try String.fetchAll(db, sql: "SELECT persistentID FROM track WHERE isCloudOnly=1")
+        struct CloudRow: Sendable {
+            let pid: String; let name: String; let artist: String
+            let albumArtist: String; let album: String; let trackNum: Int; let duration: Double
         }
-        log.info("Riparazione cloud-only: \(cloudPIDs.count) candidati")
-        guard !cloudPIDs.isEmpty else {
+        let candidates: [CloudRow] = try db.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT persistentID, name, artist, albumArtist, album, trackNumber, duration
+                FROM track WHERE isCloudOnly=1
+                """)
+                .map { CloudRow(pid: $0["persistentID"] ?? "",
+                                name: $0["name"] ?? "",
+                                artist: $0["artist"] ?? "",
+                                albumArtist: $0["albumArtist"] ?? "",
+                                album: $0["album"] ?? "",
+                                trackNum: $0["trackNumber"] ?? 0,
+                                duration: $0["duration"] ?? 0) }
+        }
+        log.info("Riparazione cloud-only: \(candidates.count) candidati")
+        guard !candidates.isEmpty else {
             setProgress(.init(phase: .done, processed: 0, total: 0, lastSyncDate: nil))
             return 0
         }
-        setProgress(.init(phase: .resolvingLocations(resolved: 0, total: cloudPIDs.count),
-                          processed: 0, total: cloudPIDs.count, lastSyncDate: nil))
+        guard let mediaFolder = Self.musicMediaFolderURL() else {
+            throw MusiFixError.appleScriptError(
+                "Cartella media di Music non trovata nelle preferenze (media-folder-url)")
+        }
+        setProgress(.init(phase: .resolvingLocations(resolved: 0, total: candidates.count),
+                          processed: 0, total: candidates.count, lastSyncDate: nil))
 
-        let musicPaths = try await bulkFetcher.locationsForPersistentIDs(Set(cloudPIDs))
-        log.info("Location recuperate da Music: \(musicPaths.count)/\(cloudPIDs.count)")
+        // Indice per TITOLO normalizzato → file. La struttura su disco è eterogenea
+        // (Artista/Album/NN, Artista/Titolo sciolto, Compilations/Album/[D-]NN, nomi
+        // sanitizzati da Music): l'euristica Artista/Album/NN fallisce. Il titolo
+        // estratto dal filename è il segnale più stabile; disambiguiamo le collisioni
+        // con cartella album + numero traccia, e in caso di parità saltiamo (sicuro).
+        let indexes = await Self.buildMediaIndexes(mediaFolderPath: mediaFolder.path)
+        log.info("File audio indicizzati: \(indexes.byTitle.count) titoli distinti")
+
+        // Durate dei soli file in bucket di titolo ambigui (>1 candidato): servono a
+        // separare i brani omonimi (vedi matchAudioFile).
+        var ambiguousPaths = Set<String>()
+        for t in candidates {
+            let bucket = indexes.byTitle[Self.normKey(t.name)] ?? []
+            if bucket.count > 1 { for e in bucket { ambiguousPaths.insert(e.path) } }
+        }
+        let fileDurations = await Self.readDurations(paths: ambiguousPaths)
 
         var repaired: [(pid: String, path: String)] = []
-        for (pid, path) in musicPaths where FileManager.default.fileExists(atPath: path) {
-            repaired.append((pid, path))
+        for t in candidates {
+            guard let path = Self.matchAudioFile(name: t.name, artist: t.artist,
+                                                 albumArtist: t.albumArtist, album: t.album,
+                                                 trackNum: t.trackNum, duration: t.duration,
+                                                 in: indexes.byTitle, fileDurations: fileDurations),
+                  FileManager.default.fileExists(atPath: path) else { continue }
+            repaired.append((t.pid, path))
         }
+        log.info("Location recuperate via filesystem: \(repaired.count)/\(candidates.count)")
 
         let snapshot = repaired
         try db.write { db in
@@ -497,8 +597,214 @@ public actor IndexService {
             }
         }
 
-        setProgress(.init(phase: .done, processed: repaired.count, total: cloudPIDs.count, lastSyncDate: nil))
+        setProgress(.init(phase: .done, processed: repaired.count, total: candidates.count, lastSyncDate: nil))
         return repaired.count
+    }
+
+    // ── Indici filesystem per la risoluzione dei path ─────────────────────────
+
+    struct AudioFileEntry: Sendable {
+        let path: String
+        let trackNum: Int
+        let albumFolderNorm: String
+        let artistFolderNorm: String
+    }
+
+    struct MediaIndexes: Sendable {
+        /// `(artist_folder, album_folder, trackNum) → path`: match esatto sulla
+        /// struttura standard `Artist/Album/NN Title.ext`.
+        let byArtistAlbumTrack: [String: String]
+        /// `titolo normalizzato → [file]`: fallback per layout non standard
+        /// (compilation, singoli sciolti, nomi sanitizzati). Vedi `matchAudioFile`.
+        let byTitle: [String: [AudioFileEntry]]
+    }
+
+    /// Scansiona una sola volta la cartella media e costruisce entrambi gli indici
+    /// (per percorso e per titolo). Eseguito in `Task.detached` (DirectoryEnumerator
+    /// non è Sendable in async). Evita la risoluzione degli alias HFS+ via AppleScript
+    /// che può bloccarsi su volumi esterni con catalogo inconsistente
+    /// (FileIDTreeGetAndLockVolumeEntryFromIndex -35) e che per i brani della Libreria
+    /// iCloud (`shared track`) restituisce comunque `missing value`.
+    static func buildMediaIndexes(mediaFolderPath: String) async -> MediaIndexes {
+        let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "flac", "aiff", "aif", "wav", "alac", "ogg", "opus", "wma"]
+        return await Task.detached(priority: .userInitiated) {
+            var pathIdx: [String: String] = [:]
+            var titleIdx: [String: [AudioFileEntry]] = [:]
+            guard let enumerator = FileManager.default.enumerator(
+                at: URL(fileURLWithPath: mediaFolderPath),
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else { return MediaIndexes(byArtistAlbumTrack: pathIdx, byTitle: titleIdx) }
+            while let fileURL = enumerator.nextObject() as? URL {
+                let ext = fileURL.pathExtension.lowercased()
+                guard audioExtensions.contains(ext) else { continue }
+                guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+                let stem = fileURL.deletingPathExtension().lastPathComponent
+                let albumFolder = fileURL.deletingLastPathComponent().lastPathComponent
+                let artistFolder = fileURL.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
+
+                // Indice esatto (artista, album, traccia)
+                let leadNum = IndexService.parseLeadingTrackNumber(from: stem)
+                let pathKey = IndexService.locationKey(artist: artistFolder, album: albumFolder, trackNum: leadNum)
+                if pathIdx[pathKey] == nil { pathIdx[pathKey] = fileURL.path }
+
+                // Indice per titolo (sia titolo spogliato del prefisso traccia sia nome
+                // completo, per coprire i titoli che iniziano davvero con un numero)
+                let (tnum, title) = IndexService.parseTrackAndTitle(stem: stem)
+                let entry = AudioFileEntry(path: fileURL.path, trackNum: tnum,
+                                           albumFolderNorm: IndexService.normKey(albumFolder),
+                                           artistFolderNorm: IndexService.normKey(artistFolder))
+                for key in Set([IndexService.normKey(title), IndexService.normKey(stem)]) where !key.isEmpty {
+                    titleIdx[key, default: []].append(entry)
+                }
+            }
+            return MediaIndexes(byArtistAlbumTrack: pathIdx, byTitle: titleIdx)
+        }.value
+    }
+
+    /// Chiave normalizzata per il match per titolo: rimuove diacritici, porta in
+    /// minuscolo e collassa qualsiasi sequenza non alfanumerica-ASCII in un singolo
+    /// spazio. Rende equivalenti varianti di punteggiatura/apostrofi (`Don't`/`Don’t`/
+    /// `Don_t`) e nomi sanitizzati da Music.
+    static func normKey(_ s: String) -> String {
+        let folded = s.folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US")).lowercased()
+        var out = ""
+        var pendingSpace = false
+        for ch in folded {
+            if ch.isASCII, ch.isLetter || ch.isNumber {
+                if pendingSpace { out.append(" "); pendingSpace = false }
+                out.append(ch)
+            } else if !out.isEmpty {
+                pendingSpace = true
+            }
+        }
+        return out
+    }
+
+    /// Estrae numero di traccia e titolo dal nome file (senza estensione).
+    /// `"08 Title"` → (8, "Title"); `"1-04 Title"` → (4, "Title"); `"Title"` → (0, "Title").
+    static func parseTrackAndTitle(stem: String) -> (track: Int, title: String) {
+        let chars = Array(stem)
+        var i = 0
+        while i < chars.count, chars[i] == " " { i += 1 }
+        var j = i
+        while j < chars.count, chars[j].isNumber { j += 1 }
+        guard j > i else { return (0, stem) }
+        let firstNum = Int(String(chars[i..<j])) ?? 0
+
+        // Forma disco-traccia: "D - NN <spazio>"
+        var k = j
+        while k < chars.count, chars[k] == " " { k += 1 }
+        if k < chars.count, chars[k] == "-" {
+            k += 1
+            while k < chars.count, chars[k] == " " { k += 1 }
+            var m = k
+            while m < chars.count, chars[m].isNumber { m += 1 }
+            if m > k, m < chars.count, chars[m] == " " {
+                let trackNum = Int(String(chars[k..<m])) ?? 0
+                var t = m
+                while t < chars.count, chars[t] == " " { t += 1 }
+                return (trackNum, String(chars[t...]))
+            }
+        }
+        // Forma traccia semplice: "NN <spazio>"
+        if j < chars.count, chars[j] == " " {
+            var t = j
+            while t < chars.count, chars[t] == " " { t += 1 }
+            return (firstNum, String(chars[t...]))
+        }
+        return (0, stem)
+    }
+
+    /// Sceglie il file corrispondente a un brano (per titolo), disambiguando le
+    /// collisioni con cartella artista, cartella album, numero traccia e — decisivo —
+    /// la DURATA: due brani distinti con lo stesso titolo (es. due "It's Like That" da
+    /// 249s e 498s) vengono mappati ognuno al proprio file. Conservativo: se nessun
+    /// candidato ha durata compatibile, o resta ambiguo, restituisce `nil` (brano non
+    /// riparato) per non puntare al file sbagliato.
+    ///
+    /// `fileDurations`: durate (s) dei file candidati nei bucket ambigui (vedi
+    /// `readDurations`); per i bucket a candidato unico non serve.
+    static func matchAudioFile(name: String, artist: String, albumArtist: String,
+                               album: String, trackNum: Int, duration: Double,
+                               in index: [String: [AudioFileEntry]],
+                               fileDurations: [String: Double]) -> String? {
+        let cands = index[normKey(name)] ?? []
+        if cands.isEmpty { return nil }
+        if cands.count == 1 { return cands[0].path }
+        let albNorm = normKey(album)
+        let artNorm = normKey(artist)
+        let albArtNorm = normKey(albumArtist)
+        // La cartella artista è spesso sanitizzata o arricchita di collaboratori
+        // ("Sister Nancy_King Tubby"): accetta il match per contenimento in entrambe
+        // le direzioni contro artist o albumArtist.
+        func artistMatches(_ folder: String) -> Bool {
+            guard !folder.isEmpty else { return false }
+            for a in [artNorm, albArtNorm] where !a.isEmpty {
+                if folder == a || folder.contains(a) || a.contains(folder) { return true }
+            }
+            return false
+        }
+        var bestScore = -1
+        var top: [AudioFileEntry] = []
+        for c in cands {
+            var score = 0
+            if !albNorm.isEmpty, c.albumFolderNorm == albNorm { score += 2 }
+            if artistMatches(c.artistFolderNorm) { score += 2 }
+            if trackNum > 0, c.trackNum == trackNum { score += 1 }
+            if score > bestScore { bestScore = score; top = [c] }
+            else if score == bestScore { top.append(c) }
+        }
+        guard bestScore > 0 else { return nil }
+        if top.count == 1 { return top[0].path }
+
+        // Parità su artista/album/traccia: separa per DURATA. Tieni solo i file la cui
+        // durata combacia con quella del brano (entro tolleranza). Quel che resta è lo
+        // stesso brano in formati diversi → scegli l'm4a di Apple Music.
+        guard duration > 0 else { return nil }
+        let tolerance = 4.0
+        let within = top.filter { c in
+            guard let fd = fileDurations[c.path] else { return false }
+            return abs(fd - duration) <= tolerance
+        }
+        // Se i file compatibili appartengono a più cartelle artista+album diverse, sono
+        // canzoni diverse con durata simile: troppo rischioso, non riparare.
+        let folders = Set(within.map { "\($0.artistFolderNorm)\u{1}\($0.albumFolderNorm)" })
+        guard folders.count == 1 else { return nil }
+        return within.sorted {
+            let r0 = Self.formatRank($0.path), r1 = Self.formatRank($1.path)
+            return r0 != r1 ? r0 < r1 : $0.path < $1.path
+        }.first?.path
+    }
+
+    /// Priorità di formato quando lo stesso brano esiste in più file: preferisce
+    /// l'm4a (file scaricato da Apple Music) ai formati importati a parte.
+    static func formatRank(_ path: String) -> Int {
+        switch (path as NSString).pathExtension.lowercased() {
+        case "m4a", "m4p": return 0
+        case "aac", "alac": return 1
+        case "flac": return 2
+        default: return 9
+        }
+    }
+
+    /// Legge in parallelo la durata (s) dei file indicati via AVFoundation. Usato solo
+    /// per i file candidati nei bucket di titolo ambigui, così il costo è limitato.
+    static func readDurations(paths: Set<String>) async -> [String: Double] {
+        guard !paths.isEmpty else { return [:] }
+        return await withTaskGroup(of: (String, Double?).self) { group in
+            for p in paths {
+                group.addTask {
+                    let asset = AVURLAsset(url: URL(fileURLWithPath: p))
+                    guard let cm = try? await asset.load(.duration) else { return (p, nil) }
+                    let secs = CMTimeGetSeconds(cm)
+                    return (p, secs.isFinite && secs > 0 ? secs : nil)
+                }
+            }
+            var out: [String: Double] = [:]
+            for await (p, d) in group { if let d { out[p] = d } }
+            return out
+        }
     }
 
     /// Estrae il numero di traccia dal prefisso numerico del nome file.
@@ -633,12 +939,6 @@ public actor IndexService {
 
     private func clearCheckpoint(in db: Database) throws {
         try db.execute(sql: "DELETE FROM indexing_checkpoint")
-    }
-
-    private func rebuildFTSIfNeeded() throws {
-        try db.write { db in
-            try db.execute(sql: "INSERT INTO track_fts(track_fts) VALUES('rebuild')")
-        }
     }
 
     private func setProgress(_ p: IndexProgress) {

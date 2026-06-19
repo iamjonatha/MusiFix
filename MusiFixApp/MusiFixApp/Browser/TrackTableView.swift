@@ -82,8 +82,14 @@ struct TrackTableView: NSViewRepresentable {
                 in: tc
             )
         }
-        tv?.reloadData()
-        // Ripristina la selezione dopo il reload (reloadData la azzera visivamente)
+        // Ricarica SOLO quando i dati cambiano davvero: SwiftUI chiama updateNSView
+        // anche al solo cambio di selezione, e un reloadData() di 25k righe a ogni
+        // click è inutile (stutter/flicker). La selezione è riapplicata sotto comunque.
+        let dataChanged = context.coordinator.lastDataVersion != viewModel.dataVersion
+        context.coordinator.lastDataVersion = viewModel.dataVersion
+        if dataChanged { tv?.reloadData() }
+        // Ripristina la selezione (reloadData la azzera; e va riflessa anche quando
+        // cambia in modo programmatico senza reload).
         if let tv {
             let pids = viewModel.selectedPIDs
             let idxs = IndexSet(viewModel.tracks.indices.filter { pids.contains(viewModel.tracks[$0].persistentID) })
@@ -108,6 +114,8 @@ struct TrackTableView: NSViewRepresentable {
         let bridge: any AppleMusicBridge
         weak var tableView: NSTableView?
         var suppressSelectionCallback = false
+        /// Ultima `dataVersion` riflessa nella tabella; -1 forza il primo reload.
+        var lastDataVersion = -1
         var fontSize: Double
         var onMarkAsSingle: ([String]) -> Void = { _ in }
         var onSetPosition1of1: ([String]) -> Void = { _ in }
@@ -340,7 +348,9 @@ enum TrackColumn: String, CaseIterable {
             case .uploaded:     return "↑ Caricato"
             case .purchased:    return "Acquistato"
             case .subscription: return "Apple Music"
-            case .none:         return "✓ Locale"
+            // cloudStatus assente: distingui in base al flag isCloudOnly (file locale
+            // trovato o no), così la colonna è coerente col filtro "Solo cloud".
+            case .none:         return t.isCloudOnly ? "☁ Cloud" : "✓ Locale"
             default:            return t.isCloudOnly ? "☁ Cloud" : "✓ Locale"
             }
         case .name:        return t.name

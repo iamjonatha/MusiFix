@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var showDisplaySettings = false
     @State private var searchText = ""
     @State private var showBatchEditor = false
+    @State private var showBatchYear = false
     @State private var showLog = false
     @State private var showNormalization = false
     @State private var showDuplicates = false
@@ -57,6 +58,10 @@ struct ContentView: View {
                     Button("Modifica \(browser.selectedPIDs.count) brani…") {
                         showBatchEditor = true
                     }
+                    Button { showBatchYear = true } label: {
+                        Image(systemName: "calendar.badge.clock")
+                    }
+                    .help("Recupera l'anno di prima pubblicazione (\(browser.selectedPIDs.count) brani)")
                     Button(role: .destructive) { showDeletion = true } label: {
                         Image(systemName: "trash")
                     }
@@ -104,6 +109,9 @@ struct ContentView: View {
                 Button("Scansiona copertine") { appState.startArtworkScan() }
                     .disabled(appState.isIndexing)
                     .help("Controlla in Music.app quali brani hanno copertina. Operazione lenta (~2 min). Esegui una volta prima di usare il filtro 'Senza copertina'.")
+                Button("Scansiona stato cloud") { appState.startCloudStatusScan() }
+                    .disabled(appState.isIndexing)
+                    .help("Legge da Music lo stato iCloud (Abbinato/Caricato/Acquistato/Apple Music) e popola i relativi filtri. Veloce; rieseguila se lo stato dei brani cambia.")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -244,6 +252,19 @@ struct ContentView: View {
 
                 Divider().frame(height: 16)
 
+                // Filtro anno mancante
+                Button {
+                    browser.filter = (browser.filter == .missingYear) ? .none : .missingYear
+                    browser.loadInitialPage(db: appState.db)
+                } label: {
+                    Image(systemName: "calendar.badge.exclamationmark")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(browser.filter == .missingYear ? Color.accentColor : Color.secondary)
+                .help("Filtra brani senza anno (poi selezionane più d'uno e usa \u{201C}Recupera anno\u{201D})")
+
+                Divider().frame(height: 16)
+
                 Button {
                     showDisplaySettings.toggle()
                 } label: {
@@ -373,6 +394,14 @@ struct ContentView: View {
                 appState: appState,
                 onWritten: { browser.loadInitialPage(db: appState.db) },
                 isPresented: $showBatchEditor
+            )
+        }
+        .sheet(isPresented: $showBatchYear) {
+            BatchYearResolutionView(
+                tracks: browser.selectedTracks,
+                appState: appState,
+                isPresented: $showBatchYear,
+                onApplied: { browser.loadInitialPage(db: appState.db) }
             )
         }
         .sheet(isPresented: $showLog) {

@@ -39,6 +39,11 @@ public struct DBTrack: Codable, FetchableRecord, PersistableRecord, Sendable {
     public var musicModDate: Date?         // modificationDate da Music
     public var indexedAt: Date            // quando è stato indicizzato/aggiornato
 
+    /// Anno di aggiunta a Music, materializzato da `musicDateAdded` (nil se assente).
+    /// Evita lo strftime per-riga nei filtri; calcolato in UTC per coerenza col
+    /// backfill SQL della migrazione v8.
+    public var addedYear: Int?
+
     // Normalizzati per clustering fuzzy (generati da NormalizationService)
     public var artistNormalized: String
     public var albumNormalized: String
@@ -110,7 +115,20 @@ public struct DBTrack: Codable, FetchableRecord, PersistableRecord, Sendable {
         self.artistNormalized = artist.lowercased()
         self.albumNormalized = album.lowercased()
         self.genreNormalized = genre.lowercased()
+        self.addedYear = musicDateAdded.map { DBTrack.utcYear(from: $0) }
         self.audioFingerprint = nil
+    }
+
+    /// Anno (UTC) di una data. UTC per allinearsi a `strftime('%Y', …)` usato nel
+    /// backfill della migrazione v8 e nella codifica date di GRDB.
+    private static let utcCalendar: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC")!
+        return c
+    }()
+
+    private static func utcYear(from date: Date) -> Int {
+        utcCalendar.component(.year, from: date)
     }
 }
 

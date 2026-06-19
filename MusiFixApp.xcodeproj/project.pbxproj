@@ -18,6 +18,8 @@
 		AA000023 /* DiffPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000023 /* DiffPreviewView.swift */; };
 		AA000024 /* OperationLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000024 /* OperationLogView.swift */; };
 		AA000025 /* EnrichmentSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000025 /* EnrichmentSearchView.swift */; };
+		AA000026 /* YearResolutionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000026 /* YearResolutionView.swift */; };
+		AA000027 /* BatchYearResolutionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000027 /* BatchYearResolutionView.swift */; };
 		AA000030 /* NormalizationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000030 /* NormalizationView.swift */; };
 		AA000031 /* DuplicatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000031 /* DuplicatesView.swift */; };
 		AA000032 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000032 /* DashboardView.swift */; };
@@ -41,6 +43,8 @@
 		BB000023 /* DiffPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPreviewView.swift; sourceTree = "<group>"; };
 		BB000024 /* OperationLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperationLogView.swift; sourceTree = "<group>"; };
 		BB000025 /* EnrichmentSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnrichmentSearchView.swift; sourceTree = "<group>"; };
+		BB000026 /* YearResolutionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YearResolutionView.swift; sourceTree = "<group>"; };
+		BB000027 /* BatchYearResolutionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchYearResolutionView.swift; sourceTree = "<group>"; };
 		BB000030 /* NormalizationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NormalizationView.swift; sourceTree = "<group>"; };
 		BB000031 /* DuplicatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicatesView.swift; sourceTree = "<group>"; };
 		BB000032 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
@@ -101,6 +105,8 @@
 				BB000023 /* DiffPreviewView.swift */,
 				BB000024 /* OperationLogView.swift */,
 				BB000025 /* EnrichmentSearchView.swift */,
+				BB000026 /* YearResolutionView.swift */,
+				BB000027 /* BatchYearResolutionView.swift */,
 			);
 			path = Editor;
 			sourceTree = "<group>";
@@ -257,6 +263,8 @@
 				AA000023 /* DiffPreviewView.swift in Sources */,
 				AA000024 /* OperationLogView.swift in Sources */,
 				AA000025 /* EnrichmentSearchView.swift in Sources */,
+				AA000026 /* YearResolutionView.swift in Sources */,
+				AA000027 /* BatchYearResolutionView.swift in Sources */,
 				AA000030 /* NormalizationView.swift in Sources */,
 				AA000031 /* DuplicatesView.swift in Sources */,
 				AA000032 /* DashboardView.swift in Sources */,

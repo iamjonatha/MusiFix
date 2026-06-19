@@ -25,6 +25,7 @@ struct TrackEditorPanel: View {
     @State private var lastError: String? = nil
     @State private var lastSuccess = false
     @State private var showDeletion = false
+    @State private var showYearResolution = false
 
     var hasChanges: Bool {
         name != track.name || artist != track.artist ||
@@ -66,10 +67,18 @@ struct TrackEditorPanel: View {
                         EditorField("Artista",      $artist)
                         EditorField("Album Artist", $albumArtist)
                         EditorField("Album",        $album)
-                        EditorField("Anno",         $yearText)
-                            .overlay(alignment: .trailing) {
-                                yearValidationIcon.padding(.trailing, 6)
+                        HStack(alignment: .bottom, spacing: 6) {
+                            EditorField("Anno",         $yearText)
+                                .overlay(alignment: .trailing) {
+                                    yearValidationIcon.padding(.trailing, 6)
+                                }
+                            Button { showYearResolution = true } label: {
+                                Image(systemName: "calendar.badge.clock")
                             }
+                            .buttonStyle(.borderless)
+                            .help("Recupera l'anno di prima pubblicazione online")
+                            .disabled(track.name.isEmpty || isWriting)
+                        }
                         EditorField("Genere",       $genre)
                     }
                     Divider().padding(.vertical, 2)
@@ -164,12 +173,21 @@ struct TrackEditorPanel: View {
         }
         .onAppear { resetToTrack() }
         .onChange(of: track.persistentID) { _, _ in resetToTrack() }
+        .onChange(of: track.year) { _, _ in resetToTrack() }
         .sheet(isPresented: $showDeletion) {
             DeletionView(
                 tracks: [track],
                 appState: appState,
                 onDeleted: { _ in onWritten() },
                 isPresented: $showDeletion
+            )
+        }
+        .sheet(isPresented: $showYearResolution) {
+            YearResolutionView(
+                track: track,
+                appState: appState,
+                onApplied: { onWritten() },
+                isPresented: $showYearResolution
             )
         }
     }
