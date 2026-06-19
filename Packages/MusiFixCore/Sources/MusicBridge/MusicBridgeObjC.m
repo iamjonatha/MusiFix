@@ -230,9 +230,19 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
         }
         SBElementArray<MusicArtwork *> *artworks = [t artworks];
         if (artworks.count == 0) return nil;
-        NSImage *img = artworks[0].data;
+        MusicArtwork *aw = artworks[0];
+
+        // Fonte primaria: i byte grezzi dell'immagine. Affidabili anche sui brani
+        // cloud/matched, dove la proprietà `data` (NSImage) può tornare nil via
+        // ScriptingBridge pur essendoci una copertina valida.
+        NSData *raw = aw.rawData;
+        if ([raw isKindOfClass:[NSData class]] && raw.length > 0) {
+            return raw;
+        }
+
+        // Fallback: ricava i byte dall'NSImage `data` ricodificandolo in PNG.
+        NSImage *img = aw.data;
         if (!img) return nil;
-        // Converte NSImage in PNG
         CGImageRef cgImg = [img CGImageForProposedRect:nil context:nil hints:nil];
         if (!cgImg) return nil;
         NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:cgImg];

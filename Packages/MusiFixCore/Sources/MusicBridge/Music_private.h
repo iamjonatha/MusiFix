@@ -52,7 +52,7 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 // ────────────────────────────────────────────────
 @interface MusicArtwork : SBObject
 @property (copy) NSImage *data;
-@property NSInteger rawData;
+@property (copy) NSData *rawData;
 @property (readonly) OSType format;
 @property BOOL isDownloaded;
 @property (copy, readonly) NSURL *description;
