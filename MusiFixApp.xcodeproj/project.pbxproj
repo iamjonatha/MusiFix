@@ -26,6 +26,7 @@
 		AA000033 /* DeletionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000033 /* DeletionView.swift */; };
 		AA000034 /* DivergenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000034 /* DivergenceView.swift */; };
 		AA000035 /* AlbumsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000035 /* AlbumsView.swift */; };
+		AA000040 /* OrphansView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000040 /* OrphansView.swift */; };
 		AA000090 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BB000090 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -51,6 +52,7 @@
 		BB000033 /* DeletionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionView.swift; sourceTree = "<group>"; };
 		BB000034 /* DivergenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DivergenceView.swift; sourceTree = "<group>"; };
 		BB000035 /* AlbumsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumsView.swift; sourceTree = "<group>"; };
+		BB000040 /* OrphansView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrphansView.swift; sourceTree = "<group>"; };
 		BB000090 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		CC000001 /* MusiFixApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MusiFixApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -80,6 +82,7 @@
 				EE000007 /* Deletion */,
 				EE000008 /* Divergence */,
 				EE000009 /* Albums */,
+				EE000010 /* Orphans */,
 				BB000090 /* Assets.xcassets */,
 				BB000010 /* Info.plist */,
 				BB000011 /* MusiFixApp.entitlements */,
@@ -157,6 +160,14 @@
 				BB000035 /* AlbumsView.swift */,
 			);
 			path = Albums;
+			sourceTree = "<group>";
+		};
+		EE000010 /* Orphans */ = {
+			isa = PBXGroup;
+			children = (
+				BB000040 /* OrphansView.swift */,
+			);
+			path = Orphans;
 			sourceTree = "<group>";
 		};
 		EE000000 /* root */ = {
@@ -271,6 +282,7 @@
 				AA000033 /* DeletionView.swift in Sources */,
 				AA000034 /* DivergenceView.swift in Sources */,
 				AA000035 /* AlbumsView.swift in Sources */,
+				AA000040 /* OrphansView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

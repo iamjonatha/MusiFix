@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var showLog = false
     @State private var showNormalization = false
     @State private var showDuplicates = false
+    @State private var showOrphans = false
     @State private var showDashboard = false
     @State private var viewMode: ViewMode = .tracks
     @State private var showDeletion = false
@@ -91,6 +92,11 @@ struct ContentView: View {
                     Image(systemName: "doc.on.doc")
                 }
                 .help("Trova duplicati")
+
+                Button { showOrphans = true } label: {
+                    Image(systemName: "externaldrive.badge.questionmark")
+                }
+                .help("Trova file audio orfani sul disco non presenti in libreria")
 
                 Button { showLog = true } label: {
                     Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
@@ -416,6 +422,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showDuplicates) {
             DuplicatesView(appState: appState, isPresented: $showDuplicates)
+        }
+        .sheet(isPresented: $showOrphans) {
+            OrphansView(appState: appState, isPresented: $showOrphans)
         }
         .sheet(isPresented: $showDashboard) {
             DashboardView(

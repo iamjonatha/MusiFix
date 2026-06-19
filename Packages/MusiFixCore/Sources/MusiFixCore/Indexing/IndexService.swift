@@ -625,8 +625,12 @@ public actor IndexService {
     /// che può bloccarsi su volumi esterni con catalogo inconsistente
     /// (FileIDTreeGetAndLockVolumeEntryFromIndex -35) e che per i brani della Libreria
     /// iCloud (`shared track`) restituisce comunque `missing value`.
+    /// Estensioni dei file considerati audio durante la scansione filesystem.
+    /// Fonte di verità unica condivisa con `OrphanScanService`.
+    static let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "flac", "aiff", "aif", "wav", "alac", "ogg", "opus", "wma"]
+
     static func buildMediaIndexes(mediaFolderPath: String) async -> MediaIndexes {
-        let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "flac", "aiff", "aif", "wav", "alac", "ogg", "opus", "wma"]
+        let audioExtensions = Self.audioExtensions
         return await Task.detached(priority: .userInitiated) {
             var pathIdx: [String: String] = [:]
             var titleIdx: [String: [AudioFileEntry]] = [:]
