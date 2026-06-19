@@ -16,6 +16,7 @@ struct DashboardView: View {
 
     @State private var stats: LibraryStats = .zero
     @State private var isLoading = true
+    @State private var isExporting = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -49,6 +50,8 @@ struct DashboardView: View {
                         inconsistenciesSection
                         Divider()
                         formatSection
+                        Divider()
+                        exportReportsSection
                         Divider()
                         maintenanceSection
                     }
@@ -189,6 +192,58 @@ struct DashboardView: View {
         }
     }
 
+    // ── Sezione export report Markdown ────────────────────────────────────────
+
+    private var exportReportsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Esporta report (Markdown)").font(.subheadline.bold())
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                Button {
+                    exportMarkdown(name: "musifix-brani-caricati-\(dateStamp()).md") {
+                        try await appState.exportService.uploadedTracksMarkdown()
+                    }
+                } label: {
+                    Label("Brani caricati", systemImage: "icloud.and.arrow.up")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Button {
+                    exportMarkdown(name: "musifix-brani-solo-cloud-\(dateStamp()).md") {
+                        try await appState.exportService.cloudOnlyTracksMarkdown()
+                    }
+                } label: {
+                    Label("Brani solo cloud", systemImage: "icloud")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Button {
+                    exportMarkdown(name: "musifix-album-incompleti-\(dateStamp()).md") {
+                        try await appState.exportService.incompleteAlbumsMarkdown()
+                    }
+                } label: {
+                    Label("Album incompleti", systemImage: "square.stack.3d.up.slash")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Button {
+                    exportMarkdown(name: "musifix-album-con-caricati-\(dateStamp()).md") {
+                        try await appState.exportService.albumsWithUploadedMarkdown()
+                    }
+                } label: {
+                    Label("Album con caricati", systemImage: "square.stack.3d.up")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .disabled(isExporting)
+            .font(.caption)
+
+            if isExporting {
+                HStack(spacing: 6) {
+                    ProgressView().scaleEffect(0.6)
+                    Text("Generazione report…").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     // ── Sezione manutenzione ──────────────────────────────────────────────────
 
     private var maintenanceSection: some View {
@@ -262,6 +317,25 @@ struct DashboardView: View {
                 panel.allowedContentTypes = [.json]
                 guard panel.runModal() == .OK, let dest = panel.url else { return }
                 try? data.write(to: dest)
+            }
+        }
+    }
+
+    /// Genera il report Markdown (async, fuori dal main thread) e poi propone il
+    /// salvataggio su file con un NSSavePanel. Un comando per report.
+    private func exportMarkdown(name: String, generate: @escaping () async throws -> String) {
+        guard !isExporting else { return }
+        isExporting = true
+        Task {
+            let markdown = (try? await generate())
+                ?? "# Errore\n\nGenerazione del report non riuscita.\n"
+            await MainActor.run {
+                isExporting = false
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = name
+                panel.allowedContentTypes = [.init(filenameExtension: "md")!]
+                guard panel.runModal() == .OK, let dest = panel.url else { return }
+                try? markdown.data(using: .utf8)?.write(to: dest)
             }
         }
     }

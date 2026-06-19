@@ -124,6 +124,24 @@ public enum CloudStatus: String, Sendable {
         default: return false
         }
     }
+
+    /// Codice 4-char Music.app corrispondente (inverso di `init(code:)`).
+    public var code: String {
+        switch self {
+        case .none:              return ""
+        case .purchased:         return "kPur"
+        case .matched:           return "kMat"
+        case .uploaded:          return "kUpl"
+        case .subscription:      return "kSub"
+        case .ineligible:        return "kIne"
+        case .removed:           return "kRem"
+        case .error:             return "kErr"
+        case .duplicate:         return "kDpl"
+        case .noLongerAvailable: return "kRdy"
+        case .notUploaded:       return "kNot"
+        case .unknown:           return "kUnk"
+        }
+    }
 }
 
 /// Campi modificabili via Apple Music automation.

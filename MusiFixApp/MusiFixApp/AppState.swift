@@ -11,11 +11,13 @@ final class AppState: ObservableObject {
     let indexService: IndexService
     let writeService: MetadataWriteService
     let enrichmentService: EnrichmentService
+    let yearResolutionService: YearResolutionService
     let normalizationService: NormalizationService
     let albumService: AlbumService
     let duplicateService: DuplicateService
     let deletionService: DeletionService
     let divergenceService: DivergenceService
+    let exportService: ExportService
 
     @Published var indexProgress: IndexProgress = .init(
         phase: .idle, processed: 0, total: 0, lastSyncDate: nil
@@ -37,11 +39,13 @@ final class AppState: ObservableObject {
         self.indexService = IndexService(db: db, bridge: bridge)
         self.writeService = MetadataWriteService(db: db, bridge: bridge)
         self.enrichmentService = EnrichmentService()
+        self.yearResolutionService = YearResolutionService()
         self.normalizationService = NormalizationService(db: db, writeService: writeService)
         self.albumService = AlbumService(db: db, writeService: writeService, enrichment: enrichmentService)
         self.duplicateService = DuplicateService(db: db)
         self.deletionService = DeletionService(db: db, bridge: bridge)
         self.divergenceService = DivergenceService(db: db, bridge: bridge, writeService: writeService)
+        self.exportService = ExportService(db: db, albumService: albumService)
     }
 
     func startFullIndex() {
@@ -81,6 +85,25 @@ final class AppState: ObservableObject {
             }
             catch is CancellationError { print("Scansione copertine annullata") }
             catch { print("Artwork scan error: \(error)") }
+            await MainActor.run { self.isIndexing = false }
+        }
+        Task {
+            for await progress in await indexService.progressStream() {
+                self.indexProgress = progress
+            }
+        }
+    }
+
+    func startCloudStatusScan() {
+        guard !isIndexing else { return }
+        isIndexing = true
+        indexTask = Task {
+            do {
+                let n = try await indexService.scanCloudStatus()
+                print("Scansione stato cloud completata: \(n) brani")
+            }
+            catch is CancellationError { print("Scansione stato cloud annullata") }
+            catch { print("Cloud status scan error: \(error)") }
             await MainActor.run { self.isIndexing = false }
         }
         Task {

@@ -53,6 +53,20 @@ public struct TrackDAO: Sendable {
         return try request.fetchCount(db)
     }
 
+    /// Tutti i brani che soddisfano il filtro, ordinati, senza paginazione.
+    /// Usato dall'export (può restituire molte righe; non per la UI a pagine).
+    public static func fetchAllFiltered(
+        filter: TrackFilter,
+        orderBy: TrackSortField = .artist,
+        ascending: Bool = true,
+        in db: Database
+    ) throws -> [DBTrack] {
+        var request = DBTrack.all()
+        request = applyFilter(filter, to: request)
+        request = applySorting(orderBy, ascending: ascending, to: request)
+        return try request.fetchAll(db)
+    }
+
     // ── Ricerca FTS5 ──────────────────────────────────────────────────────────
 
     public static func search(
@@ -171,8 +185,7 @@ public struct TrackDAO: Sendable {
         case .year(let y):
             return request.filter(Column("year") == y)
         case .addedYear(let y):
-            return request.filter(sql: "CAST(strftime('%Y', musicDateAdded) AS INTEGER) = ?",
-                                  arguments: [y])
+            return request.filter(Column("addedYear") == y)
         }
     }
 
@@ -185,8 +198,8 @@ public struct TrackDAO: Sendable {
 
     public static func fetchDistinctAddedYears(in db: Database) throws -> [Int] {
         try Int.fetchAll(db, sql: """
-            SELECT DISTINCT CAST(strftime('%Y', musicDateAdded) AS INTEGER) yr
-            FROM track WHERE musicDateAdded IS NOT NULL ORDER BY yr DESC
+            SELECT DISTINCT addedYear FROM track
+            WHERE addedYear IS NOT NULL ORDER BY addedYear DESC
             """)
     }
 
