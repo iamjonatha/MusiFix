@@ -39,7 +39,9 @@ final class AppState: ObservableObject {
         self.bridge = AppleMusicBridgeFactory.makeBridge()
         self.indexService = IndexService(db: db, bridge: bridge)
         self.writeService = MetadataWriteService(db: db, bridge: bridge)
-        self.enrichmentService = EnrichmentService()
+        self.enrichmentService = EnrichmentService(
+            discogsToken: UserDefaults.standard.string(forKey: "discogsToken")
+        )
         self.yearResolutionService = YearResolutionService()
         self.normalizationService = NormalizationService(db: db, writeService: writeService)
         self.albumService = AlbumService(db: db, writeService: writeService, enrichment: enrichmentService)

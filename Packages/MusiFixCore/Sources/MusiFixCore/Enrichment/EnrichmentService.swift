@@ -11,17 +11,34 @@ public actor EnrichmentService {
     private let session: URLSession
     private var cache: [String: [ArtworkCandidate]] = [:]
 
+    /// User-Agent richiesto da MusicBrainz e Discogs (e usato anche per scaricare
+    /// le immagini da CDN che rifiutano richieste senza UA, es. i.discogs.com).
+    private let userAgent = "MusiFix/0.1 (jonatha.panni@gmail.com)"
+
+    /// Token personale Discogs. Se nil/vuoto, il provider Discogs viene saltato.
+    private var discogsToken: String?
+
     // Rate limiter separato per provider
     private let iTunesRate = RateLimiter(interval: 0.5)
     private let mbRate = RateLimiter(interval: 1.1) // MusicBrainz: max 1 req/s
+    private let deezerRate = RateLimiter(interval: 0.3) // Deezer: ~50 req/5s
+    private let discogsRate = RateLimiter(interval: 1.1) // Discogs: 60 req/min (autenticato)
     // Limiter conservativo per gli scan di massa (Fase D): evita i 403 di iTunes
     private let albumScanRate = RateLimiter(interval: 3.0)
 
-    public init() {
+    public init(discogsToken: String? = nil) {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 12
         config.timeoutIntervalForResource = 30
         self.session = URLSession(configuration: config)
+        let trimmed = discogsToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.discogsToken = (trimmed?.isEmpty == false) ? trimmed : nil
+    }
+
+    /// Imposta (o rimuove) il token Discogs a runtime. Normalizza stringhe vuote a nil.
+    public func setDiscogsToken(_ token: String?) {
+        let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        discogsToken = (trimmed?.isEmpty == false) ? trimmed : nil
     }
 
     // ── Ricerca candidati ─────────────────────────────────────────────────────
@@ -47,6 +64,17 @@ public actor EnrichmentService {
         // MusicBrainz: ricerca per album
         let mb = (try? await searchMusicBrainz(albumArtist: albumArtist, album: album)) ?? []
 
+        // Deezer: ricerca per album (API pubblica, senza autenticazione)
+        let deezer = (try? await searchDeezer(albumArtist: albumArtist, album: album)) ?? []
+
+        // Discogs: solo se è configurato un token personale
+        let discogs: [ArtworkCandidate]
+        if discogsToken != nil {
+            discogs = (try? await searchDiscogs(albumArtist: albumArtist, album: album)) ?? []
+        } else {
+            discogs = []
+        }
+
         // iTunes: seconda ricerca per titolo brano (se diverso da album)
         var itunesTitle: [ArtworkCandidate] = []
         if useTitle {
@@ -62,7 +90,7 @@ public actor EnrichmentService {
 
         // Merge: dedup per fullURL, mantieni score massimo
         var byURL: [URL: ArtworkCandidate] = [:]
-        for c in itunesAlbum + mb + itunesTitle {
+        for c in itunesAlbum + mb + deezer + discogs + itunesTitle {
             if let existing = byURL[c.fullURL] {
                 if c.score > existing.score { byURL[c.fullURL] = c }
             } else {
@@ -78,7 +106,9 @@ public actor EnrichmentService {
 
     /// Scarica i dati immagine da un URL (usato per il download "full" al momento dell'applicazione).
     public func fetchImageData(from url: URL) async throws -> Data {
-        let (data, response) = try await session.data(from: url)
+        var request = URLRequest(url: url)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw EnrichmentError.downloadFailed(url)
         }
@@ -242,7 +272,7 @@ public actor EnrichmentService {
             URLQueryItem(name: "term",   value: "\(albumArtist) \(album)"),
             URLQueryItem(name: "entity", value: "album"),
             URLQueryItem(name: "media",  value: "music"),
-            URLQueryItem(name: "limit",  value: "8"),
+            URLQueryItem(name: "limit",  value: "20"),
         ]
         guard let url = components.url else { return [] }
 
@@ -252,7 +282,7 @@ public actor EnrichmentService {
         return response.results.compactMap { result -> ArtworkCandidate? in
             guard let artBase = result.artworkUrl100,
                   let previewURL = URL(string: artBase.replacingOccurrences(of: "100x100bb", with: "250x250bb")),
-                  let fullURL   = URL(string: artBase.replacingOccurrences(of: "100x100bb", with: "1400x1400bb"))
+                  let fullURL   = URL(string: artBase.replacingOccurrences(of: "100x100bb", with: "3000x3000bb"))
             else { return nil }
 
             let year = result.releaseDate.flatMap { parseYear($0) }
@@ -284,7 +314,7 @@ public actor EnrichmentService {
         guard let url = components.url else { return [] }
 
         var request = URLRequest(url: url)
-        request.setValue("MusiFix/0.1 (jonatha.panni@gmail.com)", forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
 
         let (data, _) = try await session.data(for: request)
         let response = try JSONDecoder().decode(MBSearchResponse.self, from: data)
@@ -324,6 +354,91 @@ public actor EnrichmentService {
         }
 
         return candidates
+    }
+
+    // ── Deezer (API pubblica, senza autenticazione) ─────────────────────────────
+
+    private func searchDeezer(albumArtist: String, album: String) async throws -> [ArtworkCandidate] {
+        await deezerRate.wait()
+
+        // Ricerca avanzata Deezer: filtri artist/album tra virgolette.
+        let term = "artist:\"\(albumArtist)\" album:\"\(album)\""
+        var components = URLComponents(string: "https://api.deezer.com/search/album")!
+        components.queryItems = [
+            URLQueryItem(name: "q",     value: term),
+            URLQueryItem(name: "limit", value: "10"),
+        ]
+        guard let url = components.url else { return [] }
+
+        let (data, _) = try await session.data(from: url)
+        let response = try JSONDecoder().decode(DeezerSearchResponse.self, from: data)
+
+        return response.data.compactMap { r -> ArtworkCandidate? in
+            // cover_xl ~1000px (full), cover_medium ~250px (anteprima).
+            guard let previewStr = r.coverMedium,
+                  let fullStr = r.coverXl ?? r.coverBig,
+                  let previewURL = URL(string: previewStr),
+                  let fullURL   = URL(string: fullStr)
+            else { return nil }
+
+            let artistScore = tokenSimilarity(albumArtist, r.artist?.name ?? "")
+            let albumScore  = tokenSimilarity(album,       r.title ?? "")
+            let score = artistScore * 0.4 + albumScore * 0.6
+
+            return ArtworkCandidate(
+                previewURL: previewURL, fullURL: fullURL,
+                year: nil, provider: "Deezer",
+                collectionName: r.title ?? album,
+                artistName: r.artist?.name ?? albumArtist,
+                score: score
+            )
+        }
+    }
+
+    // ── Discogs (richiede token personale gratuito) ─────────────────────────────
+
+    private func searchDiscogs(albumArtist: String, album: String) async throws -> [ArtworkCandidate] {
+        guard let token = discogsToken else { return [] }
+        await discogsRate.wait()
+
+        var components = URLComponents(string: "https://api.discogs.com/database/search")!
+        components.queryItems = [
+            URLQueryItem(name: "type",          value: "release"),
+            URLQueryItem(name: "artist",        value: albumArtist),
+            URLQueryItem(name: "release_title", value: album),
+            URLQueryItem(name: "per_page",      value: "10"),
+            URLQueryItem(name: "token",         value: token),
+        ]
+        guard let url = components.url else { return [] }
+
+        var request = URLRequest(url: url)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw EnrichmentError.downloadFailed(url)
+        }
+        let decoded = try JSONDecoder().decode(DiscogsSearchResponse.self, from: data)
+
+        // Il titolo Discogs è nel formato "Artista - Album": lo confronto con la query intera.
+        let query = "\(albumArtist) \(album)"
+        return decoded.results.compactMap { r -> ArtworkCandidate? in
+            // Scarta i placeholder senza immagine (spacer.gif) e le stringhe vuote.
+            guard let coverStr = r.coverImage,
+                  !coverStr.isEmpty, !coverStr.contains("spacer.gif"),
+                  let fullURL = URL(string: coverStr)
+            else { return nil }
+            let previewURL = r.thumb.flatMap { $0.isEmpty ? nil : URL(string: $0) } ?? fullURL
+            let score = tokenSimilarity(query, r.title ?? "")
+            return ArtworkCandidate(
+                previewURL: previewURL, fullURL: fullURL,
+                year: r.year.flatMap { Int($0) },
+                provider: "Discogs",
+                collectionName: r.title ?? album,
+                artistName: albumArtist,
+                score: score
+            )
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -443,4 +558,48 @@ private struct MBArtist: Codable {
 private struct MBCoverArtArchive: Codable {
     let front: Bool?
     let count: Int?
+}
+
+// ── Codable Deezer ──────────────────────────────────────────────────────────────
+
+private struct DeezerSearchResponse: Codable {
+    let data: [DeezerAlbum]
+}
+
+private struct DeezerAlbum: Codable {
+    let title: String?
+    let coverMedium: String?
+    let coverBig: String?
+    let coverXl: String?
+    let artist: DeezerArtist?
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case coverMedium = "cover_medium"
+        case coverBig    = "cover_big"
+        case coverXl     = "cover_xl"
+        case artist
+    }
+}
+
+private struct DeezerArtist: Codable {
+    let name: String?
+}
+
+// ── Codable Discogs ─────────────────────────────────────────────────────────────
+
+private struct DiscogsSearchResponse: Codable {
+    let results: [DiscogsResult]
+}
+
+private struct DiscogsResult: Codable {
+    let title: String?
+    let year: String?
+    let coverImage: String?
+    let thumb: String?
+
+    enum CodingKeys: String, CodingKey {
+        case title, year, thumb
+        case coverImage = "cover_image"
+    }
 }

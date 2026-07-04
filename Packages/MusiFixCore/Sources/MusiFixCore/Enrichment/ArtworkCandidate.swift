@@ -6,7 +6,7 @@ public struct ArtworkCandidate: Sendable, Identifiable {
     public let previewURL: URL        // thumbnail ~250px per la griglia
     public let fullURL: URL           // immagine originale da applicare
     public let year: Int?
-    public let provider: String       // "iTunes" | "MusicBrainz"
+    public let provider: String       // "iTunes" | "MusicBrainz" | "Deezer" | "Discogs"
     public let collectionName: String
     public let artistName: String
     public let score: Double          // 0…1, similarità con la query

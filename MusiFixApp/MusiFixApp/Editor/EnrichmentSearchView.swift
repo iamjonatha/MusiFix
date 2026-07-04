@@ -24,6 +24,8 @@ struct EnrichmentSearchView: View {
     @State private var autoMode = false
     @State private var autoThreshold = 0.7
     @State private var appliedOK = false
+    @State private var showTokenSettings = false
+    @AppStorage("discogsToken") private var discogsToken: String = ""
 
     private let columns = [
         GridItem(.adaptive(minimum: 140, maximum: 160), spacing: 10)
@@ -45,6 +47,20 @@ struct EnrichmentSearchView: View {
                 Text("Cerca copertina online")
                     .font(.headline)
                 Spacer()
+                Button { showTokenSettings.toggle() } label: {
+                    Image(systemName: "gearshape")
+                        .foregroundStyle(discogsToken.isEmpty ? .secondary : Color.accentColor)
+                }
+                .buttonStyle(.plain)
+                .help("Provider copertine · token Discogs")
+                .popover(isPresented: $showTokenSettings, arrowEdge: .bottom) {
+                    DiscogsTokenSettings(token: $discogsToken) { newToken in
+                        Task {
+                            await appState.enrichmentService.setDiscogsToken(newToken)
+                            await MainActor.run { startSearch() }
+                        }
+                    }
+                }
                 Button { isPresented = false } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }.buttonStyle(.plain)
@@ -288,7 +304,7 @@ struct EnrichmentSearchView: View {
 
     @ViewBuilder
     private func providerBadge(_ provider: String) -> some View {
-        let color: Color = provider == "iTunes" ? .pink : .orange
+        let color = artworkProviderColor(provider)
         Text(provider)
             .font(.caption2.bold())
             .padding(.horizontal, 5).padding(.vertical, 2)
@@ -365,8 +381,50 @@ private struct CandidateCard: View {
 
     private func providerDot(_ provider: String) -> some View {
         Circle()
-            .fill(provider == "iTunes" ? Color.pink : Color.orange)
+            .fill(artworkProviderColor(provider))
             .frame(width: 6, height: 6)
+    }
+}
+
+// ── Colore per provider (condiviso) ───────────────────────────────────────────
+
+func artworkProviderColor(_ provider: String) -> Color {
+    switch provider {
+    case "iTunes":      return .pink
+    case "MusicBrainz": return .orange
+    case "Deezer":      return .purple
+    case "Discogs":     return .indigo
+    default:            return .gray
+    }
+}
+
+// ── Impostazioni token Discogs ────────────────────────────────────────────────
+
+private struct DiscogsTokenSettings: View {
+    @Binding var token: String
+    var onSave: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Provider copertine").font(.headline)
+            Text("Discogs amplia i risultati (edizioni rare, vinili) ma richiede un token personale gratuito. Generalo da Discogs → Settings → Developers e incollalo qui.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            SecureField("Token Discogs", text: $token)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Link("Apri Discogs Developers",
+                     destination: URL(string: "https://www.discogs.com/settings/developers")!)
+                    .font(.caption)
+                Spacer()
+                Button("Salva") { onSave(token); dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 340)
     }
 }
 
