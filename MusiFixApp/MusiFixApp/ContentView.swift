@@ -23,6 +23,7 @@ struct ContentView: View {
     @State private var showEditor = true
     @State private var availableGenres: [String] = []
     @State private var availableAddedYears: [Int] = []
+    @State private var availableYears: [Int] = []
     @State private var markSinglePIDs: [String] = []
     @State private var showMarkSingleConfirm = false
     @State private var setPosition1of1PIDs: [String] = []
@@ -241,6 +242,43 @@ struct ContentView: View {
 
                 Divider().frame(height: 16)
 
+                // Menu filtro anno di pubblicazione
+                Menu {
+                    Button {
+                        browser.filter = .none
+                        browser.loadInitialPage(db: appState.db)
+                    } label: { Label("Tutti gli anni", systemImage: "calendar") }
+
+                    Divider()
+
+                    ForEach(availableYears, id: \.self) { y in
+                        Button(String(y)) {
+                            browser.filter = .year(y)
+                            browser.loadInitialPage(db: appState.db)
+                        }
+                    }
+                } label: {
+                    Label(yearFilterLabel(browser.filter), systemImage: "calendar.badge.clock")
+                        .frame(minWidth: 70, alignment: .leading)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Filtra per anno di pubblicazione")
+
+                Divider().frame(height: 16)
+
+                // Raggruppa per anno di pubblicazione
+                Button {
+                    browser.setGroupByYear(!browser.groupByYear, db: appState.db)
+                } label: {
+                    Image(systemName: "rectangle.grid.1x2")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(browser.groupByYear ? Color.accentColor : Color.secondary)
+                .help("Raggruppa i brani per anno di pubblicazione")
+
+                Divider().frame(height: 16)
+
                 // Filtro senza copertina
                 Button {
                     if browser.filter == .missingArtwork {
@@ -393,6 +431,9 @@ struct ContentView: View {
             availableAddedYears = (try? appState.db.read { db in
                 try TrackDAO.fetchDistinctAddedYears(in: db)
             }) ?? []
+            availableYears = (try? appState.db.read { db in
+                try TrackDAO.fetchDistinctYears(in: db)
+            }) ?? []
         }
         .sheet(isPresented: $showBatchEditor) {
             BatchEditorView(
@@ -527,6 +568,11 @@ private func genreFilterLabel(_ filter: TrackFilter) -> String {
 private func dateFilterLabel(_ filter: TrackFilter) -> String {
     if case .addedYear(let y) = filter { return String(y) }
     return "Anno"
+}
+
+private func yearFilterLabel(_ filter: TrackFilter) -> String {
+    if case .year(let y) = filter { return String(y) }
+    return "Anno pubbl."
 }
 
 private func cloudFilterLabel(_ filter: TrackFilter) -> String {

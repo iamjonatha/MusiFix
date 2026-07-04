@@ -92,7 +92,11 @@ struct TrackTableView: NSViewRepresentable {
         // cambia in modo programmatico senza reload).
         if let tv {
             let pids = viewModel.selectedPIDs
-            let idxs = IndexSet(viewModel.tracks.indices.filter { pids.contains(viewModel.tracks[$0].persistentID) })
+            let rows = viewModel.displayRows
+            let idxs = IndexSet(rows.indices.filter {
+                if case .track(let t) = rows[$0] { return pids.contains(t.persistentID) }
+                return false
+            })
             context.coordinator.suppressSelectionCallback = true
             tv.selectRowIndexes(idxs, byExtendingSelection: false)
             context.coordinator.suppressSelectionCallback = false
@@ -134,8 +138,7 @@ struct TrackTableView: NSViewRepresentable {
             menu.removeAllItems()
             guard let tv = tableView else { return }
             let row = tv.clickedRow >= 0 ? tv.clickedRow : tv.selectedRow
-            guard row >= 0, row < viewModel.tracks.count else { return }
-            let track = viewModel.tracks[row]
+            guard row >= 0, let track = track(atRow: row) else { return }
 
             if let path = track.locationPath {
                 let finderItem = NSMenuItem(
@@ -164,9 +167,7 @@ struct TrackTableView: NSViewRepresentable {
             if tv.clickedRow >= 0, !rows.contains(tv.clickedRow) {
                 rows = IndexSet(integer: tv.clickedRow)
             }
-            menuTargetPIDs = rows.compactMap {
-                $0 < viewModel.tracks.count ? viewModel.tracks[$0].persistentID : nil
-            }
+            menuTargetPIDs = rows.compactMap { track(atRow: $0)?.persistentID }
             if !menuTargetPIDs.isEmpty {
                 menu.addItem(.separator())
                 let singleItem = NSMenuItem(
@@ -216,9 +217,26 @@ struct TrackTableView: NSViewRepresentable {
             }
         }
 
+        // ── Mappatura riga di visualizzazione → brano ──────────────────────────
+        /// Restituisce il brano alla riga `row` di `displayRows`, o nil se la riga
+        /// è un'intestazione di gruppo o fuori range.
+        private func track(atRow row: Int) -> DBTrack? {
+            let rows = viewModel.displayRows
+            guard row >= 0, row < rows.count else { return nil }
+            if case .track(let t) = rows[row] { return t }
+            return nil
+        }
+
+        private func isHeaderRow(_ row: Int) -> Bool {
+            let rows = viewModel.displayRows
+            guard row >= 0, row < rows.count else { return false }
+            if case .header = rows[row] { return true }
+            return false
+        }
+
         // DataSource
         func numberOfRows(in tableView: NSTableView) -> Int {
-            viewModel.tracks.count
+            viewModel.displayRows.count
         }
 
         func tableView(
@@ -226,22 +244,54 @@ struct TrackTableView: NSViewRepresentable {
             viewFor tableColumn: NSTableColumn?,
             row: Int
         ) -> NSView? {
-            guard row < viewModel.tracks.count,
-                  let colID = tableColumn?.identifier,
-                  let col = TrackColumn(rawValue: colID.rawValue) else { return nil }
+            let rows = viewModel.displayRows
+            guard row < rows.count else { return nil }
 
-            let track = viewModel.tracks[row]
-            let id = NSUserInterfaceItemIdentifier("TextCell")
-            let cell = tableView.makeView(withIdentifier: id, owner: nil) as? CenteredTextField
-                ?? CenteredTextField(labelWithString: "")
-            cell.identifier = id
-            cell.font = .systemFont(ofSize: fontSize)
-            cell.lineBreakMode = .byTruncatingTail
-            cell.stringValue = col.value(for: track)
+            switch rows[row] {
+            case .header(let year, let count):
+                // Group row: NSTableView estende a tutta la larghezza la view della
+                // prima colonna, quindi la costruiamo solo lì.
+                guard tableColumn?.identifier.rawValue == TrackColumn.allCases.first?.rawValue
+                else { return nil }
+                let id = NSUserInterfaceItemIdentifier("HeaderCell")
+                let cell = tableView.makeView(withIdentifier: id, owner: nil) as? NSTextField
+                    ?? {
+                        let f = NSTextField(labelWithString: "")
+                        f.identifier = id
+                        f.isBordered = false
+                        f.drawsBackground = false
+                        return f
+                    }()
+                let label = year > 0 ? String(year) : "Senza anno"
+                cell.stringValue = "\(label)  ·  \(count) brani"
+                cell.font = .boldSystemFont(ofSize: fontSize)
+                cell.textColor = .secondaryLabelColor
+                cell.lineBreakMode = .byTruncatingTail
+                return cell
 
-            // Testo grigio per track cloud-only
-            cell.textColor = track.isCloudOnly ? .secondaryLabelColor : .labelColor
-            return cell
+            case .track(let track):
+                guard let colID = tableColumn?.identifier,
+                      let col = TrackColumn(rawValue: colID.rawValue) else { return nil }
+                let id = NSUserInterfaceItemIdentifier("TextCell")
+                let cell = tableView.makeView(withIdentifier: id, owner: nil) as? CenteredTextField
+                    ?? CenteredTextField(labelWithString: "")
+                cell.identifier = id
+                cell.font = .systemFont(ofSize: fontSize)
+                cell.lineBreakMode = .byTruncatingTail
+                cell.stringValue = col.value(for: track)
+                // Testo grigio per track cloud-only
+                cell.textColor = track.isCloudOnly ? .secondaryLabelColor : .labelColor
+                return cell
+            }
+        }
+
+        // Le intestazioni di gruppo sono full-width e non selezionabili.
+        func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
+            isHeaderRow(row)
+        }
+
+        func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+            !isHeaderRow(row)
         }
 
         // Paginazione progressiva
@@ -264,9 +314,7 @@ struct TrackTableView: NSViewRepresentable {
             guard !suppressSelectionCallback, let tv = tableView else { return }
             var pids = Set<String>()
             tv.selectedRowIndexes.forEach { row in
-                if row < viewModel.tracks.count {
-                    pids.insert(viewModel.tracks[row].persistentID)
-                }
+                if let t = track(atRow: row) { pids.insert(t.persistentID) }
             }
             viewModel.selectedPIDs = pids
         }

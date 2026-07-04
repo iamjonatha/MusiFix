@@ -203,6 +203,15 @@ public struct TrackDAO: Sendable {
             """)
     }
 
+    /// Anni di pubblicazione distinti presenti in libreria (escluso 0 = assente),
+    /// dal più recente. Alimenta il menu filtro "anno di pubblicazione".
+    public static func fetchDistinctYears(in db: Database) throws -> [Int] {
+        try Int.fetchAll(db, sql: """
+            SELECT DISTINCT year FROM track
+            WHERE year != 0 ORDER BY year DESC
+            """)
+    }
+
     private static func applySorting(
         _ field: TrackSortField,
         ascending: Bool,
