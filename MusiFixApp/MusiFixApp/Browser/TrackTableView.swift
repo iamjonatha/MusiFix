@@ -25,6 +25,8 @@ struct TrackTableView: NSViewRepresentable {
     var onSetIgnore: ([String], Bool) -> Void = { _, _ in }
     /// (brano di riferimento per la chiave album, ignora) — ignora/riabilita l'album.
     var onSetAlbumIgnore: (DBTrack, Bool) -> Void = { _, _ in }
+    /// Apre la ricerca Google embedded per il brano indicato.
+    var onWebSearch: (DBTrack) -> Void = { _ in }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -72,6 +74,7 @@ struct TrackTableView: NSViewRepresentable {
         context.coordinator.onSetPosition1of1 = onSetPosition1of1
         context.coordinator.onSetIgnore = onSetIgnore
         context.coordinator.onSetAlbumIgnore = onSetAlbumIgnore
+        context.coordinator.onWebSearch = onWebSearch
         let tv = context.coordinator.tableView
         if let tv, tv.rowHeight != displaySettings.rowHeight {
             tv.rowHeight = displaySettings.rowHeight
@@ -115,6 +118,7 @@ struct TrackTableView: NSViewRepresentable {
         c.onSetPosition1of1 = onSetPosition1of1
         c.onSetIgnore = onSetIgnore
         c.onSetAlbumIgnore = onSetAlbumIgnore
+        c.onWebSearch = onWebSearch
         return c
     }
 
@@ -134,6 +138,7 @@ struct TrackTableView: NSViewRepresentable {
         var onSetPosition1of1: ([String]) -> Void = { _ in }
         var onSetIgnore: ([String], Bool) -> Void = { _, _ in }
         var onSetAlbumIgnore: (DBTrack, Bool) -> Void = { _, _ in }
+        var onWebSearch: (DBTrack) -> Void = { _ in }
         private var menuTargetPIDs: [String] = []
         private var menuTargetTrack: DBTrack?
         private var menuIgnoreTracksToOn = true
@@ -180,6 +185,14 @@ struct TrackTableView: NSViewRepresentable {
             musicItem.representedObject = clickedTrack.persistentID
             musicItem.target = self
             menu.addItem(musicItem)
+
+            let googleItem = NSMenuItem(
+                title: "Cerca su Google",
+                action: #selector(webSearchAction(_:)),
+                keyEquivalent: ""
+            )
+            googleItem.target = self
+            menu.addItem(googleItem)
 
             // ── Azioni su selezione: "- Single" ─────────────────────────────────
             // Usa la selezione corrente; se il click è fuori dalla selezione,
@@ -254,6 +267,11 @@ struct TrackTableView: NSViewRepresentable {
         @objc func toggleIgnoreAlbumAction(_ sender: NSMenuItem) {
             guard let t = menuTargetTrack else { return }
             onSetAlbumIgnore(t, menuAlbumIgnoreToOn)
+        }
+
+        @objc func webSearchAction(_ sender: NSMenuItem) {
+            guard let t = menuTargetTrack else { return }
+            onWebSearch(t)
         }
 
         @objc func markAsSingleAction(_ sender: NSMenuItem) {

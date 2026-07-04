@@ -1,4 +1,5 @@
 import SwiftUI
+import WebKit
 import MusiFixCore
 import Persistence
 
@@ -28,6 +29,7 @@ struct ContentView: View {
     @State private var showMarkSingleConfirm = false
     @State private var setPosition1of1PIDs: [String] = []
     @State private var showSetPosition1of1Confirm = false
+    @State private var webSearchTarget: WebSearchTarget?
 
     var selectedTrack: DBTrack? {
         guard browser.selectedPIDs.count == 1 else { return nil }
@@ -54,6 +56,15 @@ struct ContentView: View {
                         Image(systemName: "arrow.left.arrow.right")
                     }
                     .help("Verifica divergenze vs Music.app (\(browser.selectedPIDs.count) selezionati)")
+                }
+
+                if let webTrack = selectedTrack {
+                    Button {
+                        webSearchTarget = WebSearchTarget(track: webTrack)
+                    } label: {
+                        Image(systemName: "magnifyingglass.circle")
+                    }
+                    .help("Cerca su Google (titolo · artista · anno) in una finestra interna")
                 }
 
                 if browser.selectedPIDs.count > 1 {
@@ -394,7 +405,8 @@ struct ContentView: View {
                             showSetPosition1of1Confirm = true
                         },
                         onSetIgnore: { pids, ignore in setIgnore(pids: pids, ignore: ignore) },
-                        onSetAlbumIgnore: { track, ignore in setAlbumIgnore(track: track, ignore: ignore) }
+                        onSetAlbumIgnore: { track, ignore in setAlbumIgnore(track: track, ignore: ignore) },
+                        onWebSearch: { track in webSearchTarget = WebSearchTarget(track: track) }
                     )
                     .frame(minWidth: 500)
 
@@ -510,6 +522,9 @@ struct ContentView: View {
                 isPresented: $showDivergence,
                 onApplied: { browser.loadInitialPage(db: appState.db) }
             )
+        }
+        .sheet(item: $webSearchTarget) { target in
+            WebSearchSheet(track: target.track) { webSearchTarget = nil }
         }
         .confirmationDialog(
             markSinglePIDs.count == 1
@@ -725,5 +740,69 @@ struct SyncStatusView: View {
         case .failed(let e):                return "Errore: \(e)"
         default:                            return ""
         }
+    }
+}
+
+// ── Ricerca Google embedded (Fase 14) ─────────────────────────────────────────
+
+/// Wrapper Identifiable per presentare la ricerca web via `.sheet(item:)`.
+struct WebSearchTarget: Identifiable {
+    let id = UUID()
+    let track: DBTrack
+}
+
+/// Finestra interna con ricerca Google per titolo · artista · anno del brano.
+struct WebSearchSheet: View {
+    let track: DBTrack
+    var onClose: () -> Void
+
+    private var query: String {
+        var parts = [track.name, track.artist]
+        if track.year > 0 { parts.append(String(track.year)) }
+        return parts.filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    private var url: URL {
+        var c = URLComponents(string: "https://www.google.com/search")!
+        c.queryItems = [URLQueryItem(name: "q", value: query)]
+        return c.url ?? URL(string: "https://www.google.com")!
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                Text("Ricerca Google").font(.headline)
+                Text(query).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+
+            Divider()
+
+            WebView(url: url)
+        }
+        .frame(width: 900, height: 680)
+    }
+}
+
+/// WKWebView minimale wrappata per SwiftUI. Carica l'URL una sola volta:
+/// la navigazione successiva resta interna alla finestra.
+struct WebView: NSViewRepresentable {
+    let url: URL
+
+    func makeNSView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        webView.load(URLRequest(url: url))
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        // Nessun ricaricamento: ogni brano apre una sheet (e quindi una WKWebView) nuova.
     }
 }

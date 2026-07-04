@@ -147,7 +147,7 @@ Multi-disco: escluso dai fix automatici; la Fase G2 supporta multi-disco in modo
 | **11** | Copertine: iTunes hi-res (3000) + Deezer + Discogs (token) | ✅ |
 | **12** | Anno pubblicazione: filtro/sort + vista raggruppata a sezioni | ✅ |
 | **13** | Ignora in MusiFix (brano + album): esclusi da verifica completezza album e normalizzazione | ✅ |
-| **14** | Ricerca Google embedded (finestra WKWebView, no browser esterno) | ⬜ |
+| **14** | Ricerca Google embedded (finestra WKWebView, no browser esterno) | ✅ |
 | **15** | Evidenziare brani non in playlist (escluse smart) + evidenziazione condizionale (assorbe "senza copertina") | ⬜ |
 
 ### Fase 11 — Copertine ✅
@@ -162,7 +162,9 @@ Multi-disco: escluso dai fix automatici; la Fase G2 supporta multi-disco in modo
 - Esclusione applicata a: **normalizzazione** (SQL NOT IN in `NormalizationService`) e **verifica completezza album** (`AlbumService`: `verifyAlbumsOnline`, `incompleteAlbums`, `completeVerifiedWithoutTag`).
 - UI: menu contestuale in `TrackTableView` (ignora brano/i + album) e `AlbumsView` (ignora album), attenuazione righe/indicatore "Ignorato", filtro `TrackFilter.ignored` (icona nosign in toolbar).
 
+### Fase 14 — Ricerca Google embedded ✅
+- `WebSearchSheet` + `WebView` (WKWebView) in `ContentView`; pulsante toolbar (brano singolo) + voce menu contestuale "Cerca su Google" in `TrackTableView`. Query = titolo · artista · anno, finestra interna (no browser esterno).
+
 ## Idee future (rimanenti)
-- Aggiungere un pulsante che Integri le ricerca google nel browser con chiave di ricerca titolo artista anno embeddata in una finestra dell'applicativo (no aprire browser esterno)
 - Evidenziare tutti i brani che non appartengono a playlist (escludere le playlist smart)
-- Permettere di evidenziare i brani sprovvisti di copertine
+- Permettere di evidenziare i brani sprovvisti di copertine (→ assorbito in Fase 15)
