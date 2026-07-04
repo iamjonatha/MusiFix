@@ -148,7 +148,7 @@ Multi-disco: escluso dai fix automatici; la Fase G2 supporta multi-disco in modo
 | **12** | Anno pubblicazione: filtro/sort + vista raggruppata a sezioni | ✅ |
 | **13** | Ignora in MusiFix (brano + album): esclusi da verifica completezza album e normalizzazione | ✅ |
 | **14** | Ricerca Google embedded (finestra WKWebView, no browser esterno) | ✅ |
-| **15** | Evidenziare brani non in playlist (escluse smart) + evidenziazione condizionale (assorbe "senza copertina") | ⬜ |
+| **15** | Evidenziare brani non in playlist (escluse smart) + evidenziazione condizionale (assorbe "senza copertina") | ✅ |
 
 ### Fase 11 — Copertine ✅
 - `EnrichmentService`: iTunes full 1400→3000 e limit 8→20; nuovi provider Deezer (no auth) e Discogs (token personale in UserDefaults `discogsToken`, popover ingranaggio in `EnrichmentSearchView`). `fetchImageData` invia User-Agent.
@@ -165,6 +165,12 @@ Multi-disco: escluso dai fix automatici; la Fase G2 supporta multi-disco in modo
 ### Fase 14 — Ricerca Google embedded ✅
 - `WebSearchSheet` + `WebView` (WKWebView) in `ContentView`; pulsante toolbar (brano singolo) + voce menu contestuale "Cerca su Google" in `TrackTableView`. Query = titolo · artista · anno, finestra interna (no browser esterno).
 
-## Idee future (rimanenti)
-- Evidenziare tutti i brani che non appartengono a playlist (escludere le playlist smart)
-- Permettere di evidenziare i brani sprovvisti di copertine (→ assorbito in Fase 15)
+### Fase 15 — Non in playlist + evidenziazione condizionale ✅
+- Bridge ObjC: `MusicUserPlaylist` (smart/specialKind) + `userPlaylists`; `regularPlaylistTrackPersistentIDs` (bulk `arrayByApplyingSelector`, salta smart/cartelle/speciali). Fallback NSAppleScript.
+- `AppleMusicBridge.tracksInRegularPlaylists()`; migrazione **v10** colonna `inPlaylist` (NULL/0/1) + indice; `IndexService.scanPlaylistMembership()`; pulsante toolbar "Scansiona playlist".
+- Filtro `TrackFilter.notInAnyPlaylist` (icona list.bullet.rectangle).
+- Evidenziazione condizionale di riga (`HighlightRowView`): "Non in playlist" (arancione) e "Senza copertina" (blu), con toggle nel popover impostazioni tabella; set caricate in `ContentView` (`TrackDAO.fetchNotInPlaylistPIDs`/`fetchMissingArtworkPIDs`) e ricaricate a fine scansione.
+- ⚠️ `inPlaylist`/`hasArtwork` non sono nel modello `DBTrack` (come da design): rieseguire "Scansiona playlist"/"Scansiona copertine" dopo un reindex completo.
+
+## Idee future
+_(nessuna in coda — le 5 evolutive richieste sono completate)_

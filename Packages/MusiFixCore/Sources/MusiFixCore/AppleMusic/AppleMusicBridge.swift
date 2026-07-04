@@ -24,6 +24,10 @@ public protocol AppleMusicBridge: Sendable {
 
     /// Seleziona e mostra il track in Music.app (porta Music in primo piano).
     func revealInMusic(persistentID: String) async throws
+
+    /// Persistent ID di tutti i brani che appartengono ad almeno una playlist
+    /// "normale" dell'utente (escluse smart playlist, cartelle e playlist speciali).
+    func tracksInRegularPlaylists() async throws -> Set<String>
 }
 
 /// Seleziona l'implementazione ottimale disponibile a runtime.

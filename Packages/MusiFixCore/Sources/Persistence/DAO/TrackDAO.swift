@@ -193,6 +193,9 @@ public struct TrackDAO: Sendable {
                 OR (LOWER(COALESCE(NULLIF(albumArtist,''), artist)) || CHAR(31) || LOWER(album))
                    IN (SELECT albumKey FROM album_ignore)
                 """)
+        case .notInAnyPlaylist:
+            // inPlaylist == 0 (scansionato e in nessuna playlist normale).
+            return request.filter(Column("inPlaylist") == 0)
         }
     }
 
@@ -217,6 +220,16 @@ public struct TrackDAO: Sendable {
             SELECT DISTINCT year FROM track
             WHERE year != 0 ORDER BY year DESC
             """)
+    }
+
+    /// PID dei brani in nessuna playlist normale (scansionati, inPlaylist == 0). (Fase 15)
+    public static func fetchNotInPlaylistPIDs(in db: Database) throws -> [String] {
+        try String.fetchAll(db, sql: "SELECT persistentID FROM track WHERE inPlaylist = 0")
+    }
+
+    /// PID dei brani senza copertina (scansionati, hasArtwork == 0). (Fase 15)
+    public static func fetchMissingArtworkPIDs(in db: Database) throws -> [String] {
+        try String.fetchAll(db, sql: "SELECT persistentID FROM track WHERE hasArtwork = 0")
     }
 
     private static func applySorting(
@@ -269,6 +282,7 @@ public enum TrackFilter: Sendable, Equatable {
     case year(Int)
     case addedYear(Int)          // anno di aggiunta a Music.app
     case ignored                 // brani/album ignorati in MusiFix (Fase 13)
+    case notInAnyPlaylist        // brani in nessuna playlist normale (Fase 15)
 }
 
 // ── FTS5 search ──────────────────────────────────────────────────────────────

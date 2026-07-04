@@ -16,6 +16,10 @@ final class TrackBrowserViewModel: ObservableObject {
     @Published var ignoredTrackPIDs: Set<String> = []
     @Published var ignoredAlbumKeys: Set<String> = []
 
+    /// PID per l'evidenziazione condizionale di riga (Fase 15).
+    @Published var notInPlaylistPIDs: Set<String> = []
+    @Published var missingArtworkPIDs: Set<String> = []
+
     /// Raggruppamento per anno di pubblicazione: mostra intestazioni di sezione.
     /// Quando attivo si carica l'intero risultato del filtro (niente paginazione).
     @Published private(set) var groupByYear: Bool = false

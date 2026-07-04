@@ -468,6 +468,31 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
         _ = try runAppleScript(script)
     }
 
+    // ─── playlist membership ─────────────────────────────────────────────────
+
+    public func tracksInRegularPlaylists() async throws -> Set<String> {
+        // Salta smart playlist e playlist speciali; unisce i persistentID con un
+        // solo `get persistent ID of every track` per playlist (delimitatore linefeed).
+        let script = """
+        tell application "Music"
+            set od to AppleScript's text item delimiters
+            set AppleScript's text item delimiters to linefeed
+            set out to ""
+            repeat with p in user playlists
+                try
+                    if (smart of p is false) and (special kind of p is none) then
+                        set out to out & ((get persistent ID of every track of p) as string) & linefeed
+                    end if
+                end try
+            end repeat
+            set AppleScript's text item delimiters to od
+            return out
+        end tell
+        """
+        let raw = try runAppleScript(script)
+        return Set(raw.components(separatedBy: "\n").filter { !$0.isEmpty })
+    }
+
     // ─── NSAppleScript runner ────────────────────────────────────────────────
 
     @discardableResult

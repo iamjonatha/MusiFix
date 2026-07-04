@@ -70,6 +70,11 @@ public final class ScriptingBridgeImpl: AppleMusicBridge, @unchecked Sendable {
         // il comando reveal. Si usa NSAppleScript che invia il corretto Apple Event direttamente.
         try await NSAppleScriptImpl().revealInMusic(persistentID: persistentID)
     }
+
+    public func tracksInRegularPlaylists() async throws -> Set<String> {
+        let raw = try bridge.regularPlaylistTrackPersistentIDs()
+        return Set(raw)
+    }
 }
 
 // ─── Track init from ObjC dict ────────────────────────────────────────────────

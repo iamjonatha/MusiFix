@@ -130,6 +130,9 @@ struct ContentView: View {
                 Button("Scansiona stato cloud") { appState.startCloudStatusScan() }
                     .disabled(appState.isIndexing)
                     .help("Legge da Music lo stato iCloud (Abbinato/Caricato/Acquistato/Apple Music) e popola i relativi filtri. Veloce; rieseguila se lo stato dei brani cambia.")
+                Button("Scansiona playlist") { appState.startPlaylistScan() }
+                    .disabled(appState.isIndexing)
+                    .help("Legge da Music le playlist normali (escluse le smart) e marca i brani che non appartengono a nessuna. Esegui prima di usare il filtro/evidenziazione \u{201C}Non in playlist\u{201D}.")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -333,6 +336,19 @@ struct ContentView: View {
 
                 Divider().frame(height: 16)
 
+                // Filtro non in playlist
+                Button {
+                    browser.filter = (browser.filter == .notInAnyPlaylist) ? .none : .notInAnyPlaylist
+                    browser.loadInitialPage(db: appState.db)
+                } label: {
+                    Image(systemName: "list.bullet.rectangle")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(browser.filter == .notInAnyPlaylist ? Color.accentColor : Color.secondary)
+                .help("Mostra solo i brani che non appartengono a nessuna playlist normale (richiede \u{201C}Scansiona playlist\u{201D})")
+
+                Divider().frame(height: 16)
+
                 Button {
                     showDisplaySettings.toggle()
                 } label: {
@@ -462,6 +478,11 @@ struct ContentView: View {
                 try TrackDAO.fetchDistinctYears(in: db)
             }) ?? []
             reloadIgnored()
+            reloadHighlightSets()
+        }
+        .onChange(of: appState.isIndexing) { _, indexing in
+            // A fine scansione (playlist/copertine) ricarica le set di evidenziazione.
+            if !indexing { reloadHighlightSets() }
         }
         .sheet(isPresented: $showBatchEditor) {
             BatchEditorView(
@@ -566,6 +587,14 @@ struct ContentView: View {
         }
     }
 
+    /// Ricarica le set per l'evidenziazione condizionale (non in playlist / senza copertina).
+    private func reloadHighlightSets() {
+        let np = (try? appState.db.read { db in try TrackDAO.fetchNotInPlaylistPIDs(in: db) }) ?? []
+        let ma = (try? appState.db.read { db in try TrackDAO.fetchMissingArtworkPIDs(in: db) }) ?? []
+        browser.notInPlaylistPIDs = Set(np)
+        browser.missingArtworkPIDs = Set(ma)
+    }
+
     // ── Ignora in MusiFix (Fase 13) ─────────────────────────────────────────────
 
     /// Ricarica gli insiemi di brani/album ignorati per l'evidenziazione e i menu.
@@ -623,6 +652,7 @@ private func filterLabel(for filter: TrackFilter) -> String {
     case .year(let y):             return "Anno: \(y)"
     case .addedYear(let y):        return "Aggiunto nel \(y)"
     case .ignored:                 return "Ignorati in MusiFix"
+    case .notInAnyPlaylist:        return "Non in nessuna playlist"
     }
 }
 
@@ -694,6 +724,17 @@ struct TableDisplaySettingsPopover: View {
                 Slider(value: $settings.fontSize, in: 10...18, step: 1)
             }
 
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Evidenziazione righe").font(.subheadline.bold())
+                Toggle("Non in nessuna playlist", isOn: $settings.highlightNotInPlaylist)
+                Toggle("Senza copertina", isOn: $settings.highlightMissingArtwork)
+                Text("Richiedono le rispettive scansioni (playlist / copertine).")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            .toggleStyle(.checkbox)
+
             Button("Ripristina predefiniti") {
                 settings.rowHeight = 22
                 settings.fontSize = 12
@@ -701,7 +742,7 @@ struct TableDisplaySettingsPopover: View {
             .font(.caption)
         }
         .padding(16)
-        .frame(width: 240)
+        .frame(width: 260)
     }
 }
 

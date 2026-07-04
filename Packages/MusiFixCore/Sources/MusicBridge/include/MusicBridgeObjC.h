@@ -67,6 +67,11 @@ extern NSString * const MBKeyModDate;     // NSDate
 /// Seleziona e mostra il track in Music.app (porta Music in primo piano).
 - (BOOL)revealInMusicForPersistentID:(NSString *)pid error:(NSError **)error;
 
+/// Persistent ID di tutti i brani che appartengono ad almeno una playlist "normale"
+/// dell'utente (escluse le smart playlist, le cartelle e le playlist speciali).
+/// @return Array di NSString (persistentID), con possibili duplicati. Nil in errore.
+- (nullable NSArray<NSString *> *)regularPlaylistTrackPersistentIDs:(NSError **)error;
+
 @end
 
 NS_ASSUME_NONNULL_END

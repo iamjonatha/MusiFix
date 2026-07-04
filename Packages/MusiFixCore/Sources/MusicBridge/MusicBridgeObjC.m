@@ -286,6 +286,41 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
     return filtered.count > 0 ? filtered[0] : nil;
 }
 
+// ─── playlist membership ──────────────────────────────────────────────────────
+
+- (nullable NSArray<NSString *> *)regularPlaylistTrackPersistentIDs:(NSError **)error {
+    @try {
+        SBElementArray<MusicUserPlaylist *> *playlists = [_app userPlaylists];
+        if (!playlists) {
+            if (error) *error = bridgeError(11, @"Impossibile ottenere le playlist utente");
+            return nil;
+        }
+        NSMutableArray<NSString *> *result = [NSMutableArray array];
+        for (MusicUserPlaylist *pl in playlists) {
+            @try {
+                // Salta smart playlist, cartelle e playlist speciali.
+                if (pl.smart) continue;
+                if (pl.specialKind != MusicESpKNone) continue;
+
+                // Recupero massivo dei persistentID con un solo Apple Event.
+                NSArray *pids = [[pl tracks] arrayByApplyingSelector:@selector(persistentID)];
+                for (id pid in pids) {
+                    if ([pid isKindOfClass:[NSString class]] && [(NSString *)pid length] > 0) {
+                        [result addObject:pid];
+                    }
+                }
+            } @catch (NSException *inner) {
+                // Playlist problematica (es. condivisa/non accessibile): la saltiamo.
+                NSLog(@"[MusicBridge] playlist saltata: %@", inner.reason ?: @"?");
+            }
+        }
+        return [result copy];
+    } @catch (NSException *ex) {
+        if (error) *error = bridgeError(12, ex.reason ?: @"Eccezione enumerazione playlist");
+        return nil;
+    }
+}
+
 - (BOOL)revealInMusicForPersistentID:(NSString *)pid error:(NSError **)error {
     @try {
         MusicTrack *t = [self trackForReveal:pid];

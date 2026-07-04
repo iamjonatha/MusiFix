@@ -8,6 +8,9 @@ import MusiFixCore
 final class TableDisplaySettings: ObservableObject {
     @AppStorage("tableRowHeight") var rowHeight: Double = 22
     @AppStorage("tableFontSize") var fontSize: Double = 12
+    /// Evidenziazioni condizionali di riga (Fase 15).
+    @AppStorage("highlightNotInPlaylist") var highlightNotInPlaylist: Bool = false
+    @AppStorage("highlightMissingArtwork") var highlightMissingArtwork: Bool = false
 }
 
 // ── TrackTableView ────────────────────────────────────────────────────────────
@@ -75,6 +78,8 @@ struct TrackTableView: NSViewRepresentable {
         context.coordinator.onSetIgnore = onSetIgnore
         context.coordinator.onSetAlbumIgnore = onSetAlbumIgnore
         context.coordinator.onWebSearch = onWebSearch
+        context.coordinator.highlightNotInPlaylist = displaySettings.highlightNotInPlaylist
+        context.coordinator.highlightMissingArtwork = displaySettings.highlightMissingArtwork
         let tv = context.coordinator.tableView
         if let tv, tv.rowHeight != displaySettings.rowHeight {
             tv.rowHeight = displaySettings.rowHeight
@@ -97,6 +102,14 @@ struct TrackTableView: NSViewRepresentable {
         let dataChanged = context.coordinator.lastDataVersion != viewModel.dataVersion
         context.coordinator.lastDataVersion = viewModel.dataVersion
         if dataChanged { tv?.reloadData() }
+
+        // Reload anche se cambia lo stato di evidenziazione condizionale (toggle o
+        // set ricaricati), così le righe si ridisegnano senza un cambio dati.
+        let hlSig = "\(displaySettings.highlightNotInPlaylist)|\(displaySettings.highlightMissingArtwork)|\(viewModel.notInPlaylistPIDs.count)|\(viewModel.missingArtworkPIDs.count)"
+        if context.coordinator.lastHighlightSig != hlSig {
+            context.coordinator.lastHighlightSig = hlSig
+            if !dataChanged { tv?.reloadData() }
+        }
         // Ripristina la selezione (reloadData la azzera; e va riflessa anche quando
         // cambia in modo programmatico senza reload).
         if let tv {
@@ -134,6 +147,10 @@ struct TrackTableView: NSViewRepresentable {
         /// Ultima `dataVersion` riflessa nella tabella; -1 forza il primo reload.
         var lastDataVersion = -1
         var fontSize: Double
+        var highlightNotInPlaylist = false
+        var highlightMissingArtwork = false
+        /// Firma dello stato evidenziazione: forza reload quando cambia (Fase 15).
+        var lastHighlightSig = ""
         var onMarkAsSingle: ([String]) -> Void = { _ in }
         var onSetPosition1of1: ([String]) -> Void = { _ in }
         var onSetIgnore: ([String], Bool) -> Void = { _, _ in }
@@ -380,6 +397,30 @@ struct TrackTableView: NSViewRepresentable {
             !isHeaderRow(row)
         }
 
+        // Evidenziazione condizionale di riga (Fase 15)
+        func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+            let id = NSUserInterfaceItemIdentifier("HighlightRow")
+            let rv = tableView.makeView(withIdentifier: id, owner: nil) as? HighlightRowView
+                ?? {
+                    let v = HighlightRowView()
+                    v.identifier = id
+                    return v
+                }()
+            rv.highlightColor = highlightColor(forRow: row)
+            return rv
+        }
+
+        private func highlightColor(forRow row: Int) -> NSColor? {
+            guard let t = track(atRow: row) else { return nil }
+            if highlightMissingArtwork, viewModel.missingArtworkPIDs.contains(t.persistentID) {
+                return NSColor.systemBlue.withAlphaComponent(0.12)
+            }
+            if highlightNotInPlaylist, viewModel.notInPlaylistPIDs.contains(t.persistentID) {
+                return NSColor.systemOrange.withAlphaComponent(0.13)
+            }
+            return nil
+        }
+
         // Paginazione progressiva
         func tableView(_ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int) {
             Task { @MainActor in
@@ -404,6 +445,21 @@ struct TrackTableView: NSViewRepresentable {
             }
             viewModel.selectedPIDs = pids
         }
+    }
+}
+
+// ── Riga con tinta di evidenziazione condizionale (Fase 15) ───────────────────
+
+private final class HighlightRowView: NSTableRowView {
+    var highlightColor: NSColor? {
+        didSet { if highlightColor != oldValue { needsDisplay = true } }
+    }
+
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+        guard let color = highlightColor else { return }
+        color.setFill()
+        dirtyRect.fill(using: .sourceOver)
     }
 }
 

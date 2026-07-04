@@ -14,6 +14,16 @@ public enum Migrations {
         migrator.registerMigration("v7_has_artwork", migrate: v7_has_artwork)
         migrator.registerMigration("v8_perf_indexes", migrate: v8_perf_indexes)
         migrator.registerMigration("v9_musifix_ignore", migrate: v9_musifix_ignore)
+        migrator.registerMigration("v10_playlist_membership", migrate: v10_playlist_membership)
+    }
+
+    // ── v10: appartenenza a playlist normali (Fase 15) ────────────────────────
+    private static func v10_playlist_membership(_ db: Database) throws {
+        // NULL = non ancora scansionato, 0 = in nessuna playlist normale, 1 = in ≥1.
+        try db.alter(table: "track") { t in
+            t.add(column: "inPlaylist", .integer)
+        }
+        try db.create(index: "track_in_playlist", on: "track", columns: ["inPlaylist"])
     }
 
     // ── v9: esclusioni "ignora in MusiFix" (brano + album) ────────────────────

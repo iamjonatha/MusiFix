@@ -7,7 +7,15 @@
 #import <AppKit/AppKit.h>
 #import <ScriptingBridge/ScriptingBridge.h>
 
-@class MusicApplication, MusicLibraryPlaylist, MusicTrack, MusicArtwork, MusicSource;
+@class MusicApplication, MusicLibraryPlaylist, MusicUserPlaylist, MusicTrack, MusicArtwork, MusicSource;
+
+typedef NS_ENUM(NSUInteger, MusicESpK) {
+    MusicESpKNone        = 'kNon',
+    MusicESpKFolder      = 'kSpF',
+    MusicESpKGenius      = 'kSpG',
+    MusicESpKLibrary     = 'kSpL',
+    MusicESpKMusic       = 'kSpZ',
+};
 
 typedef NS_ENUM(NSUInteger, MusicEPlS) {
     MusicEPlSStopped       = 'kPSS',
@@ -101,6 +109,17 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 @end
 
 // ────────────────────────────────────────────────
+// MusicUserPlaylist (playlist create dall'utente; le smart hanno smart == YES)
+// ────────────────────────────────────────────────
+@interface MusicUserPlaylist : SBObject
+@property (copy, readonly) NSString *name;
+@property (readonly) BOOL smart;
+@property (readonly) MusicESpK specialKind;
+- (SBElementArray<MusicTrack *> *)tracks;
+- (id)get;
+@end
+
+// ────────────────────────────────────────────────
 // MusicSource
 // ────────────────────────────────────────────────
 @interface MusicSource : SBObject
@@ -119,5 +138,6 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 - (SBElementArray<MusicSource *> *)sources;
 - (SBElementArray<MusicTrack *> *)tracks;
 - (SBElementArray<MusicLibraryPlaylist *> *)libraryPlaylists;
+- (SBElementArray<MusicUserPlaylist *> *)userPlaylists;
 - (void)reveal:(SBObject *)item;
 @end

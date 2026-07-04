@@ -100,6 +100,25 @@ final class AppState: ObservableObject {
         }
     }
 
+    func startPlaylistScan() {
+        guard !isIndexing else { return }
+        isIndexing = true
+        indexTask = Task {
+            do {
+                let n = try await indexService.scanPlaylistMembership()
+                print("Scansione playlist completata: \(n) brani in playlist")
+            }
+            catch is CancellationError { print("Scansione playlist annullata") }
+            catch { print("Playlist scan error: \(error)") }
+            await MainActor.run { self.isIndexing = false }
+        }
+        Task {
+            for await progress in await indexService.progressStream() {
+                self.indexProgress = progress
+            }
+        }
+    }
+
     func startCloudStatusScan() {
         guard !isIndexing else { return }
         isIndexing = true

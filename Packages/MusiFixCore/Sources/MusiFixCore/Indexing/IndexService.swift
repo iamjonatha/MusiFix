@@ -459,6 +459,41 @@ public actor IndexService {
         return scanned
     }
 
+    // ── Scansione appartenenza a playlist (inPlaylist) ────────────────────────
+
+    /// Popola la colonna `inPlaylist` (0/1) interrogando Music.app per i brani che
+    /// appartengono ad almeno una playlist "normale" (escluse smart/cartelle/speciali).
+    /// On-demand come la scansione copertine; va rieseguita dopo modifiche alle playlist.
+    @discardableResult
+    public func scanPlaylistMembership() async throws -> Int {
+        log.info("Scansione playlist avviata")
+        setProgress(.init(phase: .fetchingFromMusic, processed: 0, total: 0, lastSyncDate: nil))
+
+        let members = try await bridge.tracksInRegularPlaylists()
+        let memberArray = Array(members)
+
+        let marked = try db.write { db -> Int in
+            // Azzera tutti, poi marca i membri a blocchi (limite variabili SQLite).
+            try db.execute(sql: "UPDATE track SET inPlaylist = 0")
+            var updated = 0
+            let chunkSize = 900
+            var i = 0
+            while i < memberArray.count {
+                let chunk = Array(memberArray[i..<min(i + chunkSize, memberArray.count)])
+                let ph = chunk.map { _ in "?" }.joined(separator: ",")
+                try db.execute(sql: "UPDATE track SET inPlaylist = 1 WHERE persistentID IN (\(ph))",
+                               arguments: StatementArguments(chunk.map { DatabaseValue(value: $0) }))
+                updated += db.changesCount
+                i += chunkSize
+            }
+            return updated
+        }
+
+        setProgress(.init(phase: .done, processed: marked, total: marked, lastSyncDate: nil))
+        log.info("Scansione playlist completata: \(marked) brani in almeno una playlist")
+        return marked
+    }
+
     // ── Scansione stato iCloud (cloudStatus) ──────────────────────────────────
 
     /// Popola la colonna `cloudStatus` leggendo lo stato iCloud reale da Music
