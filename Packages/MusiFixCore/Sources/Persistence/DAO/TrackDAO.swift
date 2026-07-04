@@ -184,8 +184,8 @@ public struct TrackDAO: Sendable {
             return request.filter(Column("albumNormalized") == a.lowercased())
         case .year(let y):
             return request.filter(Column("year") == y)
-        case .addedYear(let y):
-            return request.filter(Column("addedYear") == y)
+        case .yearRange(let from, let to):
+            return request.filter(Column("year") >= min(from, to) && Column("year") <= max(from, to))
         case .ignored:
             // Brani ignorati direttamente o appartenenti a un album ignorato.
             return request.filter(sql: """
@@ -206,15 +206,8 @@ public struct TrackDAO: Sendable {
             """)
     }
 
-    public static func fetchDistinctAddedYears(in db: Database) throws -> [Int] {
-        try Int.fetchAll(db, sql: """
-            SELECT DISTINCT addedYear FROM track
-            WHERE addedYear IS NOT NULL ORDER BY addedYear DESC
-            """)
-    }
-
     /// Anni di pubblicazione distinti presenti in libreria (escluso 0 = assente),
-    /// dal più recente. Alimenta il menu filtro "anno di pubblicazione".
+    /// dal più recente. Alimenta il popover filtro "anno".
     public static func fetchDistinctYears(in db: Database) throws -> [Int] {
         try Int.fetchAll(db, sql: """
             SELECT DISTINCT year FROM track
@@ -280,7 +273,7 @@ public enum TrackFilter: Sendable, Equatable {
     case artist(String)
     case album(String)
     case year(Int)
-    case addedYear(Int)          // anno di aggiunta a Music.app
+    case yearRange(Int, Int)     // periodo di pubblicazione [from, to] inclusi
     case ignored                 // brani/album ignorati in MusiFix (Fase 13)
     case notInAnyPlaylist        // brani in nessuna playlist normale (Fase 15)
 }

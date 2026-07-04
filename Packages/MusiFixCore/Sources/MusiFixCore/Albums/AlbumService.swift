@@ -560,4 +560,31 @@ public actor AlbumService {
         log.info("markAsSingle: \(items.count) tracce")
         return try await writeService.writeBatch(items)
     }
+
+    // ── Fase 14: editing massivo campi album ────────────────────────────────────
+
+    /// Carica le tracce (DBTrack) per un insieme di persistentID.
+    /// Usato dalla UI per calcolare i valori comuni e l'anteprima diff.
+    public func tracks(forPids pids: [String]) throws -> [DBTrack] {
+        try db.read { db in
+            try pids.compactMap { try TrackDAO.fetch(persistentID: $0, in: db) }
+        }
+    }
+
+    /// Generi distinti già presenti in libreria (per suggerimenti nella UI).
+    public func distinctGenres() throws -> [String] {
+        try db.read { db in try TrackDAO.fetchDistinctGenres(in: db) }
+    }
+
+    /// Applica un edit di campi a livello album (tipicamente albumArtist / anno /
+    /// genere) a tutte le tracce indicate. Scrive solo i campi non-nil in `update`.
+    /// Undo automatico via operation_log.
+    public func writeAlbumFields(pids: [String], update: TrackMetadataUpdate) async throws -> WriteResult {
+        let items: [(TrackMetadataUpdate, String)] = pids.map { (update, $0) }
+        guard !items.isEmpty else {
+            return WriteResult(batchID: UUID().uuidString, succeeded: [], failed: [])
+        }
+        log.info("writeAlbumFields: \(items.count) tracce")
+        return try await writeService.writeBatch(items)
+    }
 }

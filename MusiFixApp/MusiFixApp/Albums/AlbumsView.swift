@@ -23,6 +23,8 @@ struct AlbumsView: View {
     @State private var diffAlbum: AlbumGroup?
     @State private var alignAlbum: AlbumGroup?
     @State private var ignoredAlbumKeys: Set<String> = []
+    @State private var selection: Set<String> = []
+    @State private var batchEditAlbums: [AlbumGroup]?
 
     enum Filter: String, CaseIterable, Identifiable {
         case all, incomplete, unknown, complete, mixedCloud
@@ -85,6 +87,11 @@ struct AlbumsView: View {
                     Button("Imposta posizione 1 di 1…") { showPositionFix = true }
                         .font(.caption)
                         .help("Imposta disco 1/1 e traccia 1/1 sulle tracce che mancano di numero disco o traccia")
+                    Divider().frame(height: 14)
+                    Button("Modifica campi album… (\(selection.count))") { editSelectedAlbums() }
+                        .font(.caption)
+                        .disabled(selection.isEmpty)
+                        .help("Modifica Album Artist, Anno e Genere su tutte le tracce degli album selezionati")
                 }
                 Spacer()
             }
@@ -103,13 +110,16 @@ struct AlbumsView: View {
                 Text("Nessun album in questa categoria.").foregroundStyle(.secondary).padding(.top, 4)
                 Spacer()
             } else {
-                List(filtered) { album in
+                List(filtered, selection: $selection) { album in
                     AlbumRow(album: album, store: storeInfo[album.key], bridge: appState.bridge,
                              isIgnored: ignoredAlbumKeys.contains(album.key))
                         .contentShape(Rectangle())
                         .onTapGesture(count: 2) { onOpenTracks(album.album) }
                         .contextMenu {
                             Button("Apri brani per modifica") { onOpenTracks(album.album) }
+                            Button("Modifica campi album (Album Artist, Anno, Genere)…") {
+                                editAlbums(contextTarget: album)
+                            }
                             Button("Allinea numeri traccia/disco…") { alignAlbum = album }
                             Button("Confronta durate (caricati)") { diffAlbum = album }
                                 .disabled(storeInfo[album.key]?.collectionId == nil)
@@ -144,6 +154,31 @@ struct AlbumsView: View {
         }
         .sheet(item: $alignAlbum) { album in
             AlbumPositionAlignSheet(appState: appState, album: album, onClose: { alignAlbum = nil; load() })
+        }
+        .sheet(item: Binding(
+            get: { batchEditAlbums.map { AlbumSelection(albums: $0) } },
+            set: { batchEditAlbums = $0?.albums }
+        )) { sel in
+            AlbumBatchEditSheet(appState: appState, albums: sel.albums,
+                                onClose: { batchEditAlbums = nil },
+                                onApplied: { batchEditAlbums = nil; load() })
+        }
+    }
+
+    /// Apre lo sheet di editing per gli album attualmente selezionati.
+    private func editSelectedAlbums() {
+        let chosen = albums.filter { selection.contains($0.key) }
+        guard !chosen.isEmpty else { return }
+        batchEditAlbums = chosen
+    }
+
+    /// Apre lo sheet dal menu contestuale: usa la selezione se il target vi
+    /// appartiene, altrimenti il solo album cliccato.
+    private func editAlbums(contextTarget album: AlbumGroup) {
+        if selection.contains(album.key) {
+            batchEditAlbums = albums.filter { selection.contains($0.key) }
+        } else {
+            batchEditAlbums = [album]
         }
     }
 
@@ -941,6 +976,222 @@ private struct ProposalRow: View {
         tcStr = proposal.proposedTrackCount.map  { "\($0)" } ?? ""
         dnStr = proposal.proposedDiscNumber.map  { "\($0)" } ?? ""
         dcStr = proposal.proposedDiscCount.map   { "\($0)" } ?? ""
+    }
+}
+
+// ── Sheet editing massivo campi album (Fase 14) ────────────────────────────────
+
+/// Wrapper Identifiable per pilotare `.sheet(item:)` con un insieme di album.
+private struct AlbumSelection: Identifiable {
+    let albums: [AlbumGroup]
+    var id: String { albums.map { $0.key }.joined(separator: "\u{1f}") }
+}
+
+/// Modifica in blocco Album Artist / Anno / Genere su tutte le tracce di uno o più
+/// album selezionati. Anteprima diff obbligatoria prima di scrivere.
+private struct AlbumBatchEditSheet: View {
+    let appState: AppState
+    let albums: [AlbumGroup]
+    var onClose: () -> Void
+    var onApplied: () -> Void
+
+    @State private var albumArtist = ""
+    @State private var yearText = ""
+    @State private var genre = ""
+
+    @State private var overrideAlbumArtist = false
+    @State private var overrideYear = false
+    @State private var overrideGenre = false
+
+    @State private var tracks: [DBTrack] = []
+    @State private var genreSuggestions: [String] = []
+    @State private var isLoading = true
+    @State private var isWriting = false
+    @State private var showDiff = false
+    @State private var resultText: String?
+    @State private var errorText: String?
+
+    private var totalTracks: Int { albums.reduce(0) { $0 + $1.pids.count } }
+    private var pids: [String] { albums.flatMap { $0.pids } }
+
+    private var hasAnyOverride: Bool { overrideAlbumArtist || overrideYear || overrideGenre }
+
+    private var yearInvalid: Bool {
+        overrideYear && !yearText.isEmpty && Int(yearText) == nil
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Modifica campi album").font(.headline)
+                    Text("\(albums.count) album · \(totalTracks) brani")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { onClose() } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }.buttonStyle(.plain)
+            }
+            .padding(16)
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Seleziona i campi da sovrascrivere su tutte le tracce degli album scelti.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    field("Album Artist", text: $albumArtist, enabled: $overrideAlbumArtist)
+                    field("Anno", text: $yearText, enabled: $overrideYear, placeholder: "es. 1997")
+                    if yearInvalid {
+                        Text("Anno non valido (usa solo cifre, oppure lascia vuoto per azzerare).")
+                            .font(.caption2).foregroundStyle(.red)
+                    }
+                    genreField
+
+                    if albums.count > 1 {
+                        Text("Album interessati: " + albums.map { $0.album }.joined(separator: ", "))
+                            .font(.caption2).foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                    }
+                    if let e = errorText {
+                        Text(e).font(.caption).foregroundStyle(.red)
+                    }
+                }
+                .padding(16)
+            }
+
+            Divider()
+            HStack {
+                Button("Annulla") { onClose() }.keyboardShortcut(.cancelAction)
+                if let r = resultText { Text(r).font(.caption).foregroundStyle(.secondary) }
+                Spacer()
+                if isWriting { ProgressView().scaleEffect(0.6) }
+                Button("Anteprima diff…") { showDiff = true }
+                    .disabled(!hasAnyOverride || yearInvalid || isWriting || isLoading)
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(16)
+        }
+        .frame(width: 460, height: 420)
+        .overlay {
+            if isLoading {
+                ProgressView("Caricamento brani…")
+                    .padding().background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .sheet(isPresented: $showDiff) {
+            DiffPreviewView(
+                tracks: tracks,
+                update: buildUpdate(),
+                onConfirm: { showDiff = false; apply() },
+                onCancel: { showDiff = false }
+            )
+        }
+        .onAppear { load() }
+    }
+
+    @ViewBuilder
+    private func field(_ label: String, text: Binding<String>, enabled: Binding<Bool>,
+                       placeholder: String = "") -> some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: enabled).labelsHidden().toggleStyle(.checkbox)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.caption2).foregroundStyle(.secondary)
+                TextField(placeholder, text: text)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12))
+                    .disabled(!enabled.wrappedValue)
+                    .opacity(enabled.wrappedValue ? 1 : 0.5)
+            }
+        }
+    }
+
+    private var genreField: some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: $overrideGenre).labelsHidden().toggleStyle(.checkbox)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Genere").font(.caption2).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    TextField("", text: $genre)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12))
+                        .disabled(!overrideGenre)
+                        .opacity(overrideGenre ? 1 : 0.5)
+                    if !genreSuggestions.isEmpty {
+                        Menu {
+                            ForEach(genreSuggestions, id: \.self) { g in
+                                Button(g) { genre = g; overrideGenre = true }
+                            }
+                        } label: {
+                            Image(systemName: "list.bullet")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .frame(width: 24)
+                        .help("Scegli tra i generi esistenti")
+                    }
+                }
+            }
+        }
+    }
+
+    private func buildUpdate() -> TrackMetadataUpdate {
+        var u = TrackMetadataUpdate()
+        if overrideAlbumArtist { u.albumArtist = albumArtist }
+        if overrideYear { u.year = Int(yearText) ?? 0 }
+        if overrideGenre { u.genre = genre }
+        return u
+    }
+
+    private func load() {
+        isLoading = true
+        let loadPids = pids
+        Task {
+            let loaded = (try? await appState.albumService.tracks(forPids: loadPids)) ?? []
+            let genres = (try? await appState.albumService.distinctGenres()) ?? []
+            await MainActor.run {
+                tracks = loaded
+                genreSuggestions = genres
+                initFromCommonValues()
+                isLoading = false
+            }
+        }
+    }
+
+    private func initFromCommonValues() {
+        func common<T: Equatable>(_ kp: KeyPath<DBTrack, T>) -> T? {
+            guard let first = tracks.first?[keyPath: kp] else { return nil }
+            return tracks.dropFirst().allSatisfy { $0[keyPath: kp] == first } ? first : nil
+        }
+        if let v = common(\.albumArtist) { albumArtist = v }
+        if let v = common(\.genre)       { genre = v }
+        if let v = common(\.year), v > 0 { yearText = "\(v)" }
+    }
+
+    private func apply() {
+        guard hasAnyOverride, !isWriting else { return }
+        let update = buildUpdate()
+        let writePids = pids
+        isWriting = true; errorText = nil; resultText = nil
+        Task {
+            do {
+                let r = try await appState.albumService.writeAlbumFields(pids: writePids, update: update)
+                await MainActor.run {
+                    isWriting = false
+                    if r.failed.isEmpty {
+                        onApplied()
+                    } else {
+                        resultText = "Aggiornate \(r.succeeded.count) tracce, \(r.failed.count) errori"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isWriting = false
+                    errorText = error.localizedDescription
+                }
+            }
+        }
     }
 }
 

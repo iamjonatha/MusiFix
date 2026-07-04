@@ -23,8 +23,8 @@ struct ContentView: View {
     @State private var showDivergence = false
     @State private var showEditor = true
     @State private var availableGenres: [String] = []
-    @State private var availableAddedYears: [Int] = []
     @State private var availableYears: [Int] = []
+    @State private var showYearFilterPopover = false
     @State private var markSinglePIDs: [String] = []
     @State private var showMarkSingleConfirm = false
     @State private var setPosition1of1PIDs: [String] = []
@@ -231,53 +231,23 @@ struct ContentView: View {
 
                 Divider().frame(height: 16)
 
-                // Menu filtro anno di aggiunta
-                Menu {
-                    Button {
-                        browser.filter = .none
-                        browser.loadInitialPage(db: appState.db)
-                    } label: { Label("Tutti gli anni", systemImage: "calendar") }
-
-                    Divider()
-
-                    ForEach(availableAddedYears, id: \.self) { y in
-                        Button(String(y)) {
-                            browser.filter = .addedYear(y)
-                            browser.loadInitialPage(db: appState.db)
-                        }
-                    }
-                } label: {
-                    Label(dateFilterLabel(browser.filter), systemImage: "calendar")
-                        .frame(minWidth: 70, alignment: .leading)
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Filtra per anno di aggiunta")
-
-                Divider().frame(height: 16)
-
-                // Menu filtro anno di pubblicazione
-                Menu {
-                    Button {
-                        browser.filter = .none
-                        browser.loadInitialPage(db: appState.db)
-                    } label: { Label("Tutti gli anni", systemImage: "calendar") }
-
-                    Divider()
-
-                    ForEach(availableYears, id: \.self) { y in
-                        Button(String(y)) {
-                            browser.filter = .year(y)
-                            browser.loadInitialPage(db: appState.db)
-                        }
-                    }
+                // Filtro anno/periodo (di pubblicazione)
+                Button {
+                    showYearFilterPopover.toggle()
                 } label: {
                     Label(yearFilterLabel(browser.filter), systemImage: "calendar.badge.clock")
                         .frame(minWidth: 70, alignment: .leading)
                 }
-                .menuStyle(.borderlessButton)
+                .buttonStyle(.plain)
                 .fixedSize()
-                .help("Filtra per anno di pubblicazione")
+                .help("Filtra per anno o periodo")
+                .popover(isPresented: $showYearFilterPopover, arrowEdge: .bottom) {
+                    YearFilterPopover(availableYears: availableYears, currentFilter: browser.filter) { newFilter in
+                        browser.filter = newFilter
+                        browser.loadInitialPage(db: appState.db)
+                        showYearFilterPopover = false
+                    }
+                }
 
                 Divider().frame(height: 16)
 
@@ -471,9 +441,6 @@ struct ContentView: View {
             availableGenres = (try? appState.db.read { db in
                 try TrackDAO.fetchDistinctGenres(in: db)
             }) ?? []
-            availableAddedYears = (try? appState.db.read { db in
-                try TrackDAO.fetchDistinctAddedYears(in: db)
-            }) ?? []
             availableYears = (try? appState.db.read { db in
                 try TrackDAO.fetchDistinctYears(in: db)
             }) ?? []
@@ -650,7 +617,7 @@ private func filterLabel(for filter: TrackFilter) -> String {
     case .artist(let a):           return "Artista: \(a)"
     case .album(let a):            return "Album: \(a)"
     case .year(let y):             return "Anno: \(y)"
-    case .addedYear(let y):        return "Aggiunto nel \(y)"
+    case .yearRange(let from, let to): return "Anni: \(from)–\(to)"
     case .ignored:                 return "Ignorati in MusiFix"
     case .notInAnyPlaylist:        return "Non in nessuna playlist"
     }
@@ -661,14 +628,12 @@ private func genreFilterLabel(_ filter: TrackFilter) -> String {
     return "Genere"
 }
 
-private func dateFilterLabel(_ filter: TrackFilter) -> String {
-    if case .addedYear(let y) = filter { return String(y) }
-    return "Anno"
-}
-
 private func yearFilterLabel(_ filter: TrackFilter) -> String {
-    if case .year(let y) = filter { return String(y) }
-    return "Anno pubbl."
+    switch filter {
+    case .year(let y): return String(y)
+    case .yearRange(let from, let to): return "\(from)–\(to)"
+    default: return "Anno"
+    }
 }
 
 private func cloudFilterLabel(_ filter: TrackFilter) -> String {
@@ -743,6 +708,100 @@ struct TableDisplaySettingsPopover: View {
         }
         .padding(16)
         .frame(width: 260)
+    }
+}
+
+struct YearFilterPopover: View {
+    let availableYears: [Int]
+    let currentFilter: TrackFilter
+    let onApply: (TrackFilter) -> Void
+
+    @State private var singleYearText: String = ""
+    @State private var fromYearText: String = ""
+    @State private var toYearText: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Filtra per anno")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Anno singolo").font(.subheadline.bold())
+                HStack {
+                    TextField("es. 1975", text: $singleYearText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                        .onSubmit(applySingle)
+                    Button("Applica", action: applySingle)
+                        .disabled(Int(singleYearText) == nil)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Periodo").font(.subheadline.bold())
+                HStack {
+                    TextField("Da", text: $fromYearText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 70)
+                        .onSubmit(applyRange)
+                    Text("–")
+                    TextField("A", text: $toYearText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 70)
+                        .onSubmit(applyRange)
+                    Button("Applica", action: applyRange)
+                        .disabled(Int(fromYearText) == nil || Int(toYearText) == nil)
+                }
+            }
+
+            if !availableYears.isEmpty {
+                Divider()
+                Text("Anni disponibili (\(availableYears.count))")
+                    .font(.caption).foregroundStyle(.secondary)
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 52))], spacing: 4) {
+                        ForEach(availableYears, id: \.self) { y in
+                            Button(String(y)) {
+                                onApply(.year(y))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+                }
+                .frame(maxHeight: 160)
+            }
+
+            Button("Tutti gli anni") {
+                onApply(.none)
+            }
+            .font(.caption)
+        }
+        .padding(16)
+        .frame(width: 280)
+        .onAppear {
+            switch currentFilter {
+            case .year(let y):
+                singleYearText = String(y)
+            case .yearRange(let from, let to):
+                fromYearText = String(from)
+                toYearText = String(to)
+            default:
+                break
+            }
+        }
+    }
+
+    private func applySingle() {
+        guard let y = Int(singleYearText) else { return }
+        onApply(.year(y))
+    }
+
+    private func applyRange() {
+        guard let from = Int(fromYearText), let to = Int(toYearText) else { return }
+        onApply(.yearRange(from, to))
     }
 }
 
