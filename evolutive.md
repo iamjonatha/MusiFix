@@ -135,3 +135,18 @@ Multi-disco: escluso dai fix automatici; la Fase G2 supporta multi-disco in modo
 1. **Reindex richiesto** ("Indicizza tutto") per popolare `cloudStatus` (abilita F ed E).
 2. **Verifica codici cloudStatus** dopo il reindex: `SELECT cloudStatus, COUNT(*) FROM track GROUP BY cloudStatus;` — se compaiono codici non mappati, aggiornare `CloudStatus.init(code:)` in `Model/Track.swift`.
 3. Lo scan online (D) è lento (~3 s/album): lanciarlo dalla Vista Album, è ripristinabile.
+
+- 
+
+---
+
+## Idee future
+
+- permettere sulla lista brani raggruppandoli per anno
+- Integrare servizi per ricerca copertine
+  
+  Apple offre anche una **API ufficiale e documentata**, la Apple Music API basata su MusicKit, pensata per sviluppatori con un Apple Developer Program account. In questo caso il campo `artwork.url` nella risposta JSON contiene un template tipo `{w}x{h}bb.jpeg` che puoi popolare con qualsiasi risoluzione fino a 3000x3000px
+- Poter selezionare brani o album da escludere dai processi di sistemazione (ignorati in musifix)
+- Aggiungere un pulsante che Integri le ricerca google nel browser con chiave di ricerca titolo artista anno embeddata in una finestra dell'applicativo (no aprire browser esterno)
+- Evidenziare tutti i brani che non appartengono a playlist (escludere le playlist smart)
+- Permettere di evidenziare i brani sprovvisti di copertine

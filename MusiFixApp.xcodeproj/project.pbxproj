@@ -3,10 +3,12 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2A6C64232FEAE30300818060 /* MusiFixCore in Frameworks */ = {isa = PBXBuildFile; productRef = PP000001 /* MusiFixCore */; };
+		2A6C64242FEAE30300818060 /* Persistence in Frameworks */ = {isa = PBXBuildFile; productRef = PP000002 /* Persistence */; };
 		AA000001 /* MusiFixAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000001 /* MusiFixAppApp.swift */; };
 		AA000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000002 /* ContentView.swift */; };
 		AA000003 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000003 /* AppState.swift */; };
@@ -62,13 +64,23 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2A6C64242FEAE30300818060 /* Persistence in Frameworks */,
+				2A6C64232FEAE30300818060 /* MusiFixCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		EE000001 /* MusiFixApp */ = {
+		EE000000 = {
+			isa = PBXGroup;
+			children = (
+				EE000001 /* MusiFixApp/MusiFixApp */,
+				FF000001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		EE000001 /* MusiFixApp/MusiFixApp */ = {
 			isa = PBXGroup;
 			children = (
 				BB000001 /* MusiFixAppApp.swift */,
@@ -170,14 +182,6 @@
 			path = Orphans;
 			sourceTree = "<group>";
 		};
-		EE000000 /* root */ = {
-			isa = PBXGroup;
-			children = (
-				EE000001 /* MusiFixApp */,
-				FF000001 /* Products */,
-			);
-			sourceTree = "<group>";
-		};
 		FF000001 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -234,9 +238,9 @@
 				it,
 				Base,
 			);
-			mainGroup = EE000000 /* root */;
+			mainGroup = EE000000;
 			packageReferences = (
-				PKG000001 /* MusiFixCore local package */,
+				PKG000001 /* XCLocalSwiftPackageReference "Packages/MusiFixCore" */,
 			);
 			productRefGroup = FF000001 /* Products */;
 			projectDirPath = "";
@@ -404,17 +408,19 @@
 			};
 			name = Release;
 		};
-		XC000005 /* Debug Target */ = {
+		XC000005 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = MusiFixApp/MusiFixApp/MusiFixApp.entitlements;
+				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MusiFixApp/MusiFixApp/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -423,25 +429,26 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "it.musifixapp.MusiFixApp";
+				PRODUCT_BUNDLE_IDENTIFIER = it.musifixapp.MusiFixApp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
-				CODE_SIGN_IDENTITY = "-";
 			};
 			name = Debug;
 		};
-		XC000006 /* Release Target */ = {
+		XC000006 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = MusiFixApp/MusiFixApp/MusiFixApp.entitlements;
+				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = MusiFixApp/MusiFixApp/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -450,11 +457,10 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "it.musifixapp.MusiFixApp";
+				PRODUCT_BUNDLE_IDENTIFIER = it.musifixapp.MusiFixApp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
-				CODE_SIGN_IDENTITY = "-";
 			};
 			name = Release;
 		};
@@ -473,8 +479,8 @@
 		XC000002 /* Build configuration list for PBXNativeTarget "MusiFixApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				XC000005 /* Debug Target */,
-				XC000006 /* Release Target */,
+				XC000005 /* Debug */,
+				XC000006 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -482,7 +488,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		PKG000001 /* MusiFixCore local package */ = {
+		PKG000001 /* XCLocalSwiftPackageReference "Packages/MusiFixCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/MusiFixCore;
 		};
@@ -491,16 +497,15 @@
 /* Begin XCSwiftPackageProductDependency section */
 		PP000001 /* MusiFixCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = PKG000001 /* MusiFixCore local package */;
+			package = PKG000001 /* XCLocalSwiftPackageReference "Packages/MusiFixCore" */;
 			productName = MusiFixCore;
 		};
 		PP000002 /* Persistence */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = PKG000001 /* MusiFixCore local package */;
+			package = PKG000001 /* XCLocalSwiftPackageReference "Packages/MusiFixCore" */;
 			productName = Persistence;
 		};
 /* End XCSwiftPackageProductDependency section */
-
 	};
 	rootObject = PR000001 /* Project object */;
 }
