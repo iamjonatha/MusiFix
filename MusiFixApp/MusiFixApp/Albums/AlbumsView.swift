@@ -22,6 +22,7 @@ struct AlbumsView: View {
     @State private var showPositionFix = false
     @State private var diffAlbum: AlbumGroup?
     @State private var alignAlbum: AlbumGroup?
+    @State private var ignoredAlbumKeys: Set<String> = []
 
     enum Filter: String, CaseIterable, Identifiable {
         case all, incomplete, unknown, complete, mixedCloud
@@ -103,7 +104,8 @@ struct AlbumsView: View {
                 Spacer()
             } else {
                 List(filtered) { album in
-                    AlbumRow(album: album, store: storeInfo[album.key], bridge: appState.bridge)
+                    AlbumRow(album: album, store: storeInfo[album.key], bridge: appState.bridge,
+                             isIgnored: ignoredAlbumKeys.contains(album.key))
                         .contentShape(Rectangle())
                         .onTapGesture(count: 2) { onOpenTracks(album.album) }
                         .contextMenu {
@@ -111,6 +113,12 @@ struct AlbumsView: View {
                             Button("Allinea numeri traccia/disco…") { alignAlbum = album }
                             Button("Confronta durate (caricati)") { diffAlbum = album }
                                 .disabled(storeInfo[album.key]?.collectionId == nil)
+                            Divider()
+                            if ignoredAlbumKeys.contains(album.key) {
+                                Button("Non ignorare più in MusiFix") { setAlbumIgnore(album, ignore: false) }
+                            } else {
+                                Button("Ignora album in MusiFix") { setAlbumIgnore(album, ignore: true) }
+                            }
                         }
                 }
             }
@@ -145,10 +153,25 @@ struct AlbumsView: View {
             do {
                 let groups = try await appState.albumService.albumGroups()
                 let store = try await appState.albumService.storeInfoByKey()
-                await MainActor.run { albums = groups; storeInfo = store; isLoading = false }
+                let ignored = (try? await appState.ignoreService.ignoredAlbumKeys()) ?? []
+                await MainActor.run {
+                    albums = groups; storeInfo = store; ignoredAlbumKeys = ignored; isLoading = false
+                }
             } catch {
                 await MainActor.run { errorMessage = error.localizedDescription; isLoading = false }
             }
+        }
+    }
+
+    private func setAlbumIgnore(_ album: AlbumGroup, ignore: Bool) {
+        Task {
+            if ignore {
+                try? await appState.ignoreService.ignoreAlbum(
+                    key: album.key, albumArtist: album.albumArtist, album: album.album)
+            } else {
+                try? await appState.ignoreService.unignoreAlbum(key: album.key)
+            }
+            ignoredAlbumKeys = (try? await appState.ignoreService.ignoredAlbumKeys()) ?? []
         }
     }
 
@@ -175,6 +198,7 @@ private struct AlbumRow: View {
     let album: AlbumGroup
     let store: DBAlbumStoreInfo?
     let bridge: any AppleMusicBridge
+    var isIgnored: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -194,10 +218,19 @@ private struct AlbumRow: View {
             }
             Spacer()
 
+            if isIgnored {
+                Label("Ignorato", systemImage: "nosign")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.15))
+                    .foregroundStyle(.secondary)
+                    .clipShape(Capsule())
+            }
             countBadge
             completenessBadge
         }
         .padding(.vertical, 3)
+        .opacity(isIgnored ? 0.55 : 1)
     }
 
     /// Riepilogo stati iCloud, es. "Abbinato 8 · Caricato 2".

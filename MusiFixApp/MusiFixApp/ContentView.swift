@@ -309,6 +309,19 @@ struct ContentView: View {
 
                 Divider().frame(height: 16)
 
+                // Filtro ignorati in MusiFix
+                Button {
+                    browser.filter = (browser.filter == .ignored) ? .none : .ignored
+                    browser.loadInitialPage(db: appState.db)
+                } label: {
+                    Image(systemName: "nosign")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(browser.filter == .ignored ? Color.accentColor : Color.secondary)
+                .help("Mostra solo brani/album ignorati in MusiFix")
+
+                Divider().frame(height: 16)
+
                 Button {
                     showDisplaySettings.toggle()
                 } label: {
@@ -379,7 +392,9 @@ struct ContentView: View {
                         onSetPosition1of1: { pids in
                             setPosition1of1PIDs = pids
                             showSetPosition1of1Confirm = true
-                        }
+                        },
+                        onSetIgnore: { pids, ignore in setIgnore(pids: pids, ignore: ignore) },
+                        onSetAlbumIgnore: { track, ignore in setAlbumIgnore(track: track, ignore: ignore) }
                     )
                     .frame(minWidth: 500)
 
@@ -434,6 +449,7 @@ struct ContentView: View {
             availableYears = (try? appState.db.read { db in
                 try TrackDAO.fetchDistinctYears(in: db)
             }) ?? []
+            reloadIgnored()
         }
         .sheet(isPresented: $showBatchEditor) {
             BatchEditorView(
@@ -534,6 +550,40 @@ struct ContentView: View {
             browser.loadInitialPage(db: appState.db)
         }
     }
+
+    // ── Ignora in MusiFix (Fase 13) ─────────────────────────────────────────────
+
+    /// Ricarica gli insiemi di brani/album ignorati per l'evidenziazione e i menu.
+    private func reloadIgnored() {
+        Task {
+            browser.ignoredTrackPIDs = (try? await appState.ignoreService.ignoredTrackPIDs()) ?? []
+            browser.ignoredAlbumKeys = (try? await appState.ignoreService.ignoredAlbumKeys()) ?? []
+        }
+    }
+
+    private func setIgnore(pids: [String], ignore: Bool) {
+        Task {
+            if ignore { try? await appState.ignoreService.ignoreTracks(pids) }
+            else      { try? await appState.ignoreService.unignoreTracks(pids) }
+            browser.ignoredTrackPIDs = (try? await appState.ignoreService.ignoredTrackPIDs()) ?? []
+            browser.loadInitialPage(db: appState.db)
+        }
+    }
+
+    private func setAlbumIgnore(track: DBTrack, ignore: Bool) {
+        Task {
+            let head = track.albumArtist.isEmpty ? track.artist : track.albumArtist
+            let key = IgnoreService.albumKey(
+                albumArtist: track.albumArtist, artist: track.artist, album: track.album)
+            if ignore {
+                try? await appState.ignoreService.ignoreAlbum(key: key, albumArtist: head, album: track.album)
+            } else {
+                try? await appState.ignoreService.unignoreAlbum(key: key)
+            }
+            browser.ignoredAlbumKeys = (try? await appState.ignoreService.ignoredAlbumKeys()) ?? []
+            browser.loadInitialPage(db: appState.db)
+        }
+    }
 }
 
 private func filterLabel(for filter: TrackFilter) -> String {
@@ -557,6 +607,7 @@ private func filterLabel(for filter: TrackFilter) -> String {
     case .album(let a):            return "Album: \(a)"
     case .year(let y):             return "Anno: \(y)"
     case .addedYear(let y):        return "Aggiunto nel \(y)"
+    case .ignored:                 return "Ignorati in MusiFix"
     }
 }
 

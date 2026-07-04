@@ -13,6 +13,24 @@ public enum Migrations {
         migrator.registerMigration("v6_album_store_info", migrate: v6_album_store_info)
         migrator.registerMigration("v7_has_artwork", migrate: v7_has_artwork)
         migrator.registerMigration("v8_perf_indexes", migrate: v8_perf_indexes)
+        migrator.registerMigration("v9_musifix_ignore", migrate: v9_musifix_ignore)
+    }
+
+    // ── v9: esclusioni "ignora in MusiFix" (brano + album) ────────────────────
+    private static func v9_musifix_ignore(_ db: Database) throws {
+        // Brani esclusi dai processi di sistemazione (per persistentID).
+        try db.create(table: "track_ignore") { t in
+            t.primaryKey("persistentID", .text)
+            t.column("ignoredAt", .datetime).notNull()
+        }
+        // Album esclusi (chiave = LOWER(albumArtist|artist)+CHAR(31)+LOWER(album),
+        // coerente con AlbumDAO/album_store_info).
+        try db.create(table: "album_ignore") { t in
+            t.primaryKey("albumKey", .text)
+            t.column("albumArtist", .text).notNull().defaults(to: "")
+            t.column("album", .text).notNull().defaults(to: "")
+            t.column("ignoredAt", .datetime).notNull()
+        }
     }
 
     // ── v1: schema principale ─────────────────────────────────────────────────

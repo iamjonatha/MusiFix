@@ -21,6 +21,10 @@ struct TrackTableView: NSViewRepresentable {
     let bridge: any AppleMusicBridge
     var onMarkAsSingle: ([String]) -> Void = { _ in }
     var onSetPosition1of1: ([String]) -> Void = { _ in }
+    /// (pids, ignora) — ignora/riabilita i brani indicati.
+    var onSetIgnore: ([String], Bool) -> Void = { _, _ in }
+    /// (brano di riferimento per la chiave album, ignora) — ignora/riabilita l'album.
+    var onSetAlbumIgnore: (DBTrack, Bool) -> Void = { _, _ in }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -66,6 +70,8 @@ struct TrackTableView: NSViewRepresentable {
         context.coordinator.fontSize = displaySettings.fontSize
         context.coordinator.onMarkAsSingle = onMarkAsSingle
         context.coordinator.onSetPosition1of1 = onSetPosition1of1
+        context.coordinator.onSetIgnore = onSetIgnore
+        context.coordinator.onSetAlbumIgnore = onSetAlbumIgnore
         let tv = context.coordinator.tableView
         if let tv, tv.rowHeight != displaySettings.rowHeight {
             tv.rowHeight = displaySettings.rowHeight
@@ -107,11 +113,14 @@ struct TrackTableView: NSViewRepresentable {
         let c = Coordinator(viewModel: viewModel, db: db, bridge: bridge, fontSize: displaySettings.fontSize)
         c.onMarkAsSingle = onMarkAsSingle
         c.onSetPosition1of1 = onSetPosition1of1
+        c.onSetIgnore = onSetIgnore
+        c.onSetAlbumIgnore = onSetAlbumIgnore
         return c
     }
 
     // ── Coordinator ───────────────────────────────────────────────────────────
 
+    @MainActor
     final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
         var viewModel: TrackBrowserViewModel
         let db: AppDatabase
@@ -123,7 +132,19 @@ struct TrackTableView: NSViewRepresentable {
         var fontSize: Double
         var onMarkAsSingle: ([String]) -> Void = { _ in }
         var onSetPosition1of1: ([String]) -> Void = { _ in }
+        var onSetIgnore: ([String], Bool) -> Void = { _, _ in }
+        var onSetAlbumIgnore: (DBTrack, Bool) -> Void = { _, _ in }
         private var menuTargetPIDs: [String] = []
+        private var menuTargetTrack: DBTrack?
+        private var menuIgnoreTracksToOn = true
+        private var menuAlbumIgnoreToOn = true
+
+        /// True se il brano è escluso in MusiFix (direttamente o via album ignorato).
+        private func isIgnored(_ t: DBTrack) -> Bool {
+            if viewModel.ignoredTrackPIDs.contains(t.persistentID) { return true }
+            let key = IgnoreService.albumKey(albumArtist: t.albumArtist, artist: t.artist, album: t.album)
+            return viewModel.ignoredAlbumKeys.contains(key)
+        }
 
         init(viewModel: TrackBrowserViewModel, db: AppDatabase, bridge: any AppleMusicBridge, fontSize: Double) {
             self.viewModel = viewModel
@@ -138,9 +159,9 @@ struct TrackTableView: NSViewRepresentable {
             menu.removeAllItems()
             guard let tv = tableView else { return }
             let row = tv.clickedRow >= 0 ? tv.clickedRow : tv.selectedRow
-            guard row >= 0, let track = track(atRow: row) else { return }
+            guard row >= 0, let clickedTrack = track(atRow: row) else { return }
 
-            if let path = track.locationPath {
+            if let path = clickedTrack.locationPath {
                 let finderItem = NSMenuItem(
                     title: "Mostra nel Finder",
                     action: #selector(showInFinder(_:)),
@@ -156,7 +177,7 @@ struct TrackTableView: NSViewRepresentable {
                 action: #selector(showInMusic(_:)),
                 keyEquivalent: ""
             )
-            musicItem.representedObject = track.persistentID
+            musicItem.representedObject = clickedTrack.persistentID
             musicItem.target = self
             menu.addItem(musicItem)
 
@@ -190,6 +211,49 @@ struct TrackTableView: NSViewRepresentable {
                 posItem.target = self
                 menu.addItem(posItem)
             }
+
+            // ── Ignora in MusiFix (brano + album) ───────────────────────────────
+            menu.addItem(.separator())
+            menuTargetTrack = clickedTrack
+
+            // Brani: toggle in base a se almeno uno è già ignorato direttamente.
+            let anyDirectlyIgnored = menuTargetPIDs.contains { viewModel.ignoredTrackPIDs.contains($0) }
+            menuIgnoreTracksToOn = !anyDirectlyIgnored
+            let n = menuTargetPIDs.count
+            let ignoreTitle: String
+            if anyDirectlyIgnored {
+                ignoreTitle = n == 1 ? "Non ignorare più il brano" : "Non ignorare più (\(n) brani)"
+            } else {
+                ignoreTitle = n == 1 ? "Ignora brano in MusiFix" : "Ignora \(n) brani in MusiFix"
+            }
+            let ignoreItem = NSMenuItem(title: ignoreTitle,
+                                        action: #selector(toggleIgnoreTracksAction(_:)), keyEquivalent: "")
+            ignoreItem.target = self
+            menu.addItem(ignoreItem)
+
+            // Album del brano cliccato.
+            let albumKey = IgnoreService.albumKey(
+                albumArtist: clickedTrack.albumArtist, artist: clickedTrack.artist, album: clickedTrack.album)
+            let albumIgnored = viewModel.ignoredAlbumKeys.contains(albumKey)
+            menuAlbumIgnoreToOn = !albumIgnored
+            if !clickedTrack.album.isEmpty {
+                let albumTitle = albumIgnored
+                    ? "Non ignorare più l'album \u{201C}\(clickedTrack.album)\u{201D}"
+                    : "Ignora album \u{201C}\(clickedTrack.album)\u{201D}"
+                let albumItem = NSMenuItem(title: albumTitle,
+                                           action: #selector(toggleIgnoreAlbumAction(_:)), keyEquivalent: "")
+                albumItem.target = self
+                menu.addItem(albumItem)
+            }
+        }
+
+        @objc func toggleIgnoreTracksAction(_ sender: NSMenuItem) {
+            onSetIgnore(menuTargetPIDs, menuIgnoreTracksToOn)
+        }
+
+        @objc func toggleIgnoreAlbumAction(_ sender: NSMenuItem) {
+            guard let t = menuTargetTrack else { return }
+            onSetAlbumIgnore(t, menuAlbumIgnoreToOn)
         }
 
         @objc func markAsSingleAction(_ sender: NSMenuItem) {
@@ -279,8 +343,12 @@ struct TrackTableView: NSViewRepresentable {
                 cell.font = .systemFont(ofSize: fontSize)
                 cell.lineBreakMode = .byTruncatingTail
                 cell.stringValue = col.value(for: track)
-                // Testo grigio per track cloud-only
-                cell.textColor = track.isCloudOnly ? .secondaryLabelColor : .labelColor
+                // Precedenza colore: ignorato (più attenuato) > cloud-only > normale.
+                if isIgnored(track) {
+                    cell.textColor = .tertiaryLabelColor
+                } else {
+                    cell.textColor = track.isCloudOnly ? .secondaryLabelColor : .labelColor
+                }
                 return cell
             }
         }

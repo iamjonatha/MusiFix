@@ -23,6 +23,11 @@ public actor AlbumService {
     /// Suffisso convenzionale Apple per i singoli.
     public static let singleSuffix = " - Single"
 
+    /// Chiavi degli album "ignorati in MusiFix": esclusi dalla verifica completezza. (Fase 13)
+    private func ignoredAlbumKeys() throws -> Set<String> {
+        try db.read { try Set(String.fetchAll($0, sql: "SELECT albumKey FROM album_ignore")) }
+    }
+
     // ── Fase B/G: aggregazione album ────────────────────────────────────────────
 
     /// Tutti gli album (esclusi singoli e album vuoti), ordinati per artista+album.
@@ -37,8 +42,9 @@ public actor AlbumService {
     /// Report offline degli album incompleti (brani presenti < trackCount tag).
     /// Ordinati per numero di brani mancanti (decrescente).
     public func incompleteAlbums() throws -> [AlbumGroup] {
-        try albumGroups()
-            .filter { $0.completeness == .incomplete }
+        let ignored = try ignoredAlbumKeys()
+        return try albumGroups()
+            .filter { $0.completeness == .incomplete && !ignored.contains($0.key) }
             .sorted { ($0.tagTrackCount - $0.actualCount) > ($1.tagTrackCount - $1.actualCount) }
     }
 
@@ -59,8 +65,12 @@ public actor AlbumService {
         force: Bool = false,
         progress: @Sendable (Int, Int) -> Void = { _, _ in }
     ) async throws {
-        // Solo album senza tag (gli altri sono già valutabili offline) e mono-disco.
-        let candidates = try albumGroups().filter { $0.completeness == .unknown }
+        // Solo album senza tag (gli altri sono già valutabili offline) e mono-disco,
+        // esclusi gli album ignorati in MusiFix.
+        let ignored = try ignoredAlbumKeys()
+        let candidates = try albumGroups().filter {
+            $0.completeness == .unknown && !ignored.contains($0.key)
+        }
 
         let cachedKeys: Set<String> = force ? [] : try db.read { db in
             try Set(String.fetchAll(db, sql: "SELECT albumKey FROM album_store_info"))
@@ -115,8 +125,10 @@ public actor AlbumService {
     /// scrittura di `trackCount`/`discCount` su tutte le loro tracce.
     public func completeVerifiedWithoutTag() throws -> [AlbumCountFix] {
         let store = try storeInfoByKey()
+        let ignored = try ignoredAlbumKeys()
         return try albumGroups().compactMap { g -> AlbumCountFix? in
             guard g.completeness == .unknown,
+                  !ignored.contains(g.key),
                   let info = store[g.key],
                   info.matchState == "found",
                   let total = info.storeTrackCount,

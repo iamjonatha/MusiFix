@@ -155,6 +155,31 @@ public struct DBDuplicateIgnore: Codable, FetchableRecord, PersistableRecord, Se
     }
 }
 
+/// Brano escluso ("ignorato") dai processi di sistemazione MusiFix.
+public struct DBTrackIgnore: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "track_ignore"
+    public var persistentID: String
+    public var ignoredAt: Date
+
+    public init(persistentID: String, ignoredAt: Date = Date()) {
+        self.persistentID = persistentID; self.ignoredAt = ignoredAt
+    }
+}
+
+/// Album escluso ("ignorato") dai processi di sistemazione MusiFix.
+public struct DBAlbumIgnore: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "album_ignore"
+    public var albumKey: String
+    public var albumArtist: String
+    public var album: String
+    public var ignoredAt: Date
+
+    public init(albumKey: String, albumArtist: String, album: String, ignoredAt: Date = Date()) {
+        self.albumKey = albumKey; self.albumArtist = albumArtist
+        self.album = album; self.ignoredAt = ignoredAt
+    }
+}
+
 public struct DBOperation: Codable, FetchableRecord, PersistableRecord, Sendable {
     public static let databaseTableName = "operation_log"
     public var id: Int64?

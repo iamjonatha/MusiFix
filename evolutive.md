@@ -140,13 +140,29 @@ Multi-disco: escluso dai fix automatici; la Fase G2 supporta multi-disco in modo
 
 ---
 
-## Idee future
+## Evolutive (nuova serie) — stato
 
-- permettere sulla lista brani raggruppandoli per anno
-- Integrare servizi per ricerca copertine
-  
-  Apple offre anche una **API ufficiale e documentata**, la Apple Music API basata su MusicKit, pensata per sviluppatori con un Apple Developer Program account. In questo caso il campo `artwork.url` nella risposta JSON contiene un template tipo `{w}x{h}bb.jpeg` che puoi popolare con qualsiasi risoluzione fino a 3000x3000px
-- Poter selezionare brani o album da escludere dai processi di sistemazione (ignorati in musifix)
+| Fase | Funzionalità | Stato |
+|---|---|---|
+| **11** | Copertine: iTunes hi-res (3000) + Deezer + Discogs (token) | ✅ |
+| **12** | Anno pubblicazione: filtro/sort + vista raggruppata a sezioni | ✅ |
+| **13** | Ignora in MusiFix (brano + album): esclusi da verifica completezza album e normalizzazione | ✅ |
+| **14** | Ricerca Google embedded (finestra WKWebView, no browser esterno) | ⬜ |
+| **15** | Evidenziare brani non in playlist (escluse smart) + evidenziazione condizionale (assorbe "senza copertina") | ⬜ |
+
+### Fase 11 — Copertine ✅
+- `EnrichmentService`: iTunes full 1400→3000 e limit 8→20; nuovi provider Deezer (no auth) e Discogs (token personale in UserDefaults `discogsToken`, popover ingranaggio in `EnrichmentSearchView`). `fetchImageData` invia User-Agent.
+
+### Fase 12 — Anno di pubblicazione ✅
+- `TrackDAO.fetchDistinctYears`; menu filtro "Anno pubbl." (`TrackFilter.year`); toggle "Raggruppa per anno" con group rows full-width in `TrackTableView`/`TrackBrowserViewModel` (`displayRows`).
+
+### Fase 13 — Ignora in MusiFix ✅
+- Migrazione **v9**: tabelle `track_ignore` / `album_ignore` + struct `DBTrackIgnore`/`DBAlbumIgnore`.
+- `IgnoreService` (actor): ignore/unignore brano+album, `ignoredPIDsUnion`, `albumKey` coerente con AlbumDAO.
+- Esclusione applicata a: **normalizzazione** (SQL NOT IN in `NormalizationService`) e **verifica completezza album** (`AlbumService`: `verifyAlbumsOnline`, `incompleteAlbums`, `completeVerifiedWithoutTag`).
+- UI: menu contestuale in `TrackTableView` (ignora brano/i + album) e `AlbumsView` (ignora album), attenuazione righe/indicatore "Ignorato", filtro `TrackFilter.ignored` (icona nosign in toolbar).
+
+## Idee future (rimanenti)
 - Aggiungere un pulsante che Integri le ricerca google nel browser con chiave di ricerca titolo artista anno embeddata in una finestra dell'applicativo (no aprire browser esterno)
 - Evidenziare tutti i brani che non appartengono a playlist (escludere le playlist smart)
 - Permettere di evidenziare i brani sprovvisti di copertine

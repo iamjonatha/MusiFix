@@ -27,6 +27,14 @@ public struct NormalizationResult: Sendable {
     public let errors: [(String, String)]   // (pid, messaggio)
 }
 
+/// Frammento SQL che esclude i brani "ignorati in MusiFix" (per PID o perché il
+/// loro album è ignorato). Da concatenare in coda a una WHERE già presente. (Fase 13)
+private let ignoreFilterSQL = """
+    AND persistentID NOT IN (SELECT persistentID FROM track_ignore)
+    AND (LOWER(COALESCE(NULLIF(albumArtist,''), artist)) || CHAR(31) || LOWER(album))
+        NOT IN (SELECT albumKey FROM album_ignore)
+    """
+
 /// Regole built-in di normalizzazione genere (sedate nel DB al primo avvio se assente).
 private let builtInGenreAliases: [(from: String, to: String)] = [
     ("hip hop", "Hip-Hop"),
@@ -163,6 +171,7 @@ public actor NormalizationService {
             try Row.fetchAll(db, sql: """
                 SELECT genre, persistentID
                 FROM track WHERE genre != '' AND TRIM(genre) != ''
+                \(ignoreFilterSQL)
                 ORDER BY genre
                 """)
             .map { row -> (String, String) in (row["genre"], row["persistentID"]) }
@@ -194,6 +203,7 @@ public actor NormalizationService {
             try Row.fetchAll(db, sql: """
                 SELECT artist, persistentID
                 FROM track WHERE artist != '' AND TRIM(artist) != ''
+                \(ignoreFilterSQL)
                 ORDER BY artist
                 """)
             .map { row -> (String, String) in (row["artist"], row["persistentID"]) }
@@ -228,8 +238,11 @@ public actor NormalizationService {
             // Recupera tutti i PID con questo valore originale
             let pids: [String] = try db.read { db in
                 let col = preview.field == .genre ? "genre" : "artist"
-                return try String.fetchAll(db, sql: "SELECT persistentID FROM track WHERE \(col) = ?",
-                                           arguments: [preview.originalValue])
+                return try String.fetchAll(db, sql: """
+                    SELECT persistentID FROM track WHERE \(col) = ?
+                    \(ignoreFilterSQL)
+                    """,
+                    arguments: [preview.originalValue])
             }
 
             let items: [(TrackMetadataUpdate, String)] = pids.map { pid in

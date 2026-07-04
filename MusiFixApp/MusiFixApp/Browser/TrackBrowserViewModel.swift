@@ -11,6 +11,11 @@ final class TrackBrowserViewModel: ObservableObject {
     @Published var filter: TrackFilter = .none
     @Published var selectedPIDs: Set<String> = []
 
+    /// Brani ignorati direttamente (per PID) e album ignorati (per chiave):
+    /// alimentano l'evidenziazione "attenuata" e le voci di menu contestuale. (Fase 13)
+    @Published var ignoredTrackPIDs: Set<String> = []
+    @Published var ignoredAlbumKeys: Set<String> = []
+
     /// Raggruppamento per anno di pubblicazione: mostra intestazioni di sezione.
     /// Quando attivo si carica l'intero risultato del filtro (niente paginazione).
     @Published private(set) var groupByYear: Bool = false

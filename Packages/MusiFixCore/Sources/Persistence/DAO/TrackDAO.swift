@@ -186,6 +186,13 @@ public struct TrackDAO: Sendable {
             return request.filter(Column("year") == y)
         case .addedYear(let y):
             return request.filter(Column("addedYear") == y)
+        case .ignored:
+            // Brani ignorati direttamente o appartenenti a un album ignorato.
+            return request.filter(sql: """
+                persistentID IN (SELECT persistentID FROM track_ignore)
+                OR (LOWER(COALESCE(NULLIF(albumArtist,''), artist)) || CHAR(31) || LOWER(album))
+                   IN (SELECT albumKey FROM album_ignore)
+                """)
         }
     }
 
@@ -261,6 +268,7 @@ public enum TrackFilter: Sendable, Equatable {
     case album(String)
     case year(Int)
     case addedYear(Int)          // anno di aggiunta a Music.app
+    case ignored                 // brani/album ignorati in MusiFix (Fase 13)
 }
 
 // ── FTS5 search ──────────────────────────────────────────────────────────────

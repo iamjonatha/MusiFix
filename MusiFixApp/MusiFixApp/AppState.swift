@@ -19,6 +19,7 @@ final class AppState: ObservableObject {
     let divergenceService: DivergenceService
     let exportService: ExportService
     let orphanService: OrphanScanService
+    let ignoreService: IgnoreService
 
     @Published var indexProgress: IndexProgress = .init(
         phase: .idle, processed: 0, total: 0, lastSyncDate: nil
@@ -50,6 +51,7 @@ final class AppState: ObservableObject {
         self.divergenceService = DivergenceService(db: db, bridge: bridge, writeService: writeService)
         self.exportService = ExportService(db: db, albumService: albumService)
         self.orphanService = OrphanScanService(db: db)
+        self.ignoreService = IgnoreService(db: db)
     }
 
     func startFullIndex() {
