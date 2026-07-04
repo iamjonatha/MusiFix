@@ -196,6 +196,34 @@ public struct TrackDAO: Sendable {
         case .notInAnyPlaylist:
             // inPlaylist == 0 (scansionato e in nessuna playlist normale).
             return request.filter(Column("inPlaylist") == 0)
+        case .notInPlaylistIncompleteOnly:
+            // Non in playlist, ma esclude i brani che appartengono a un album
+            // "completo": completo se abbiamo il conteggio Store (actualCount ==
+            // storeTrackCount), altrimenti se le tracce presenti coincidono col
+            // tag trackCount. Singoli e brani senza album restano sempre inclusi.
+            return request.filter(sql: """
+                inPlaylist = 0 AND (
+                    TRIM(album) = '' OR album LIKE '% - Single'
+                    OR (LOWER(COALESCE(NULLIF(albumArtist,''), artist)) || CHAR(31) || LOWER(album))
+                       NOT IN (
+                        SELECT g.gkey FROM (
+                            SELECT
+                                LOWER(COALESCE(NULLIF(t.albumArtist,''), t.artist)) || CHAR(31) || LOWER(t.album) AS gkey,
+                                COUNT(*) AS cnt,
+                                MAX(t.trackCount) AS tagCnt
+                            FROM track t
+                            WHERE TRIM(t.album) != '' AND t.album NOT LIKE '% - Single'
+                            GROUP BY gkey
+                        ) g
+                        LEFT JOIN album_store_info s ON s.albumKey = g.gkey
+                        WHERE CASE
+                            WHEN s.storeTrackCount IS NOT NULL AND s.matchState = 'found'
+                                THEN g.cnt = s.storeTrackCount
+                            ELSE g.tagCnt > 0 AND g.cnt = g.tagCnt
+                        END
+                    )
+                )
+                """)
         }
     }
 
@@ -223,6 +251,17 @@ public struct TrackDAO: Sendable {
     /// PID dei brani senza copertina (scansionati, hasArtwork == 0). (Fase 15)
     public static func fetchMissingArtworkPIDs(in db: Database) throws -> [String] {
         try String.fetchAll(db, sql: "SELECT persistentID FROM track WHERE hasArtwork = 0")
+    }
+
+    /// True se la scansione appartenenza playlist è stata eseguita almeno una volta
+    /// (la colonna `inPlaylist` è NULL finché non si scansiona).
+    public static func playlistScanDone(in db: Database) throws -> Bool {
+        (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM track WHERE inPlaylist IS NOT NULL") ?? 0) > 0
+    }
+
+    /// True se la scansione copertine è stata eseguita almeno una volta.
+    public static func artworkScanDone(in db: Database) throws -> Bool {
+        (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM track WHERE hasArtwork IS NOT NULL") ?? 0) > 0
     }
 
     private static func applySorting(
@@ -276,6 +315,7 @@ public enum TrackFilter: Sendable, Equatable {
     case yearRange(Int, Int)     // periodo di pubblicazione [from, to] inclusi
     case ignored                 // brani/album ignorati in MusiFix (Fase 13)
     case notInAnyPlaylist        // brani in nessuna playlist normale (Fase 15)
+    case notInPlaylistIncompleteOnly  // non in playlist, esclusi i brani di album completi
 }
 
 // ── FTS5 search ──────────────────────────────────────────────────────────────

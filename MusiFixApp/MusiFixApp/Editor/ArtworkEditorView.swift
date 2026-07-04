@@ -110,13 +110,33 @@ struct ArtworkEditorView: View {
 
     private func applyArtwork(_ data: Data) {
         isReplacing = true; error = nil
+        let bridge = appState.bridge; let p = pid
         Task {
             do {
                 _ = try await appState.writeService.setArtwork(data, for: pid)
-                await MainActor.run { isReplacing = false; if let img = NSImage(data: data) { image = img } }
+                // Rilegge la copertina effettiva dal brano in Music (cloud library),
+                // non il dato locale: Music può ricomprimerla/ridimensionarla. Piccolo
+                // retry perché la persistenza cloud non è immediata.
+                let reread = await Self.rereadArtwork(bridge: bridge, pid: p, retries: 3)
+                await MainActor.run {
+                    isReplacing = false
+                    image = reread ?? NSImage(data: data)   // fallback al dato locale
+                }
             } catch {
                 await MainActor.run { isReplacing = false; self.error = error.localizedDescription }
             }
         }
+    }
+
+    /// Rilegge la copertina da Music con qualche tentativo, per dare tempo alla
+    /// cloud library di persistere il nuovo artwork.
+    private static func rereadArtwork(bridge: any AppleMusicBridge, pid: String, retries: Int) async -> NSImage? {
+        for attempt in 0..<max(retries, 1) {
+            if attempt > 0 { try? await Task.sleep(nanoseconds: 800_000_000) }
+            if let data = try? await bridge.artwork(persistentID: pid), let img = NSImage(data: data) {
+                return img
+            }
+        }
+        return nil
     }
 }

@@ -75,6 +75,29 @@ public final class ScriptingBridgeImpl: AppleMusicBridge, @unchecked Sendable {
         let raw = try bridge.regularPlaylistTrackPersistentIDs()
         return Set(raw)
     }
+
+    public func userPlaylistTree() async throws -> [MusicPlaylistNode] {
+        let raw = try bridge.userPlaylistTree() as? [[String: Any]] ?? []
+        return raw.compactMap { d in
+            guard let id = d["id"] as? String, !id.isEmpty else { return nil }
+            return MusicPlaylistNode(
+                id: id,
+                name: (d["name"] as? String) ?? "",
+                isFolder: (d["isFolder"] as? Bool) ?? false,
+                parentID: d["parentID"] as? String   // NSNull → nil
+            )
+        }
+    }
+
+    public func addTracks(_ pids: [String], toPlaylistID playlistID: String) async throws -> PlaylistAddResult {
+        let raw = try bridge.addTracks(withPersistentIDs: pids, toPlaylistWithPersistentID: playlistID)
+        let dict = raw as? [String: Any] ?? [:]
+        return PlaylistAddResult(
+            added: (dict["added"] as? Int) ?? 0,
+            skipped: (dict["skipped"] as? Int) ?? 0,
+            failed: (dict["failed"] as? Int) ?? 0
+        )
+    }
 }
 
 // ─── Track init from ObjC dict ────────────────────────────────────────────────

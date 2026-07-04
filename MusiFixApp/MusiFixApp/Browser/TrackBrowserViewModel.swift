@@ -1,5 +1,6 @@
 import Foundation
 import Persistence
+import MusiFixCore
 import Combine
 
 @MainActor
@@ -19,6 +20,9 @@ final class TrackBrowserViewModel: ObservableObject {
     /// PID per l'evidenziazione condizionale di riga (Fase 15).
     @Published var notInPlaylistPIDs: Set<String> = []
     @Published var missingArtworkPIDs: Set<String> = []
+
+    /// Alberatura delle playlist utente (per il menu "Aggiungi a playlist"). (Fase 16)
+    @Published var playlists: [MusicPlaylistNode] = []
 
     /// Raggruppamento per anno di pubblicazione: mostra intestazioni di sezione.
     /// Quando attivo si carica l'intero risultato del filtro (niente paginazione).

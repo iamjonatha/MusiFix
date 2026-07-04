@@ -28,6 +28,48 @@ public protocol AppleMusicBridge: Sendable {
     /// Persistent ID di tutti i brani che appartengono ad almeno una playlist
     /// "normale" dell'utente (escluse smart playlist, cartelle e playlist speciali).
     func tracksInRegularPlaylists() async throws -> Set<String>
+
+    /// Alberatura delle playlist utente modificabili (playlist normali + cartelle),
+    /// con relazione di appartenenza alle cartelle via `parentID`.
+    func userPlaylistTree() async throws -> [MusicPlaylistNode]
+
+    /// Aggiunge i brani (per persistentID) alla playlist indicata, saltando i duplicati.
+    func addTracks(_ pids: [String], toPlaylistID playlistID: String) async throws -> PlaylistAddResult
+}
+
+// ── Modelli playlist ───────────────────────────────────────────────────────────
+
+/// Nodo dell'alberatura playlist: una playlist normale o una cartella.
+public struct MusicPlaylistNode: Sendable, Identifiable, Hashable {
+    public let id: String            // persistentID
+    public let name: String
+    public let isFolder: Bool
+    public let parentID: String?     // persistentID della cartella contenitore, se presente
+
+    public init(id: String, name: String, isFolder: Bool, parentID: String?) {
+        self.id = id; self.name = name; self.isFolder = isFolder; self.parentID = parentID
+    }
+}
+
+/// Esito di un'aggiunta di brani a playlist.
+public struct PlaylistAddResult: Sendable {
+    public let added: Int      // brani effettivamente aggiunti
+    public let skipped: Int    // già presenti in playlist
+    public let failed: Int     // non trovati / errore in aggiunta
+
+    public init(added: Int, skipped: Int, failed: Int) {
+        self.added = added; self.skipped = skipped; self.failed = failed
+    }
+}
+
+// Default: le implementazioni che non supportano le playlist (es. AppleScript) sollevano.
+public extension AppleMusicBridge {
+    func userPlaylistTree() async throws -> [MusicPlaylistNode] {
+        throw MusiFixError.appleScriptError("Gestione playlist non supportata da questo bridge")
+    }
+    func addTracks(_ pids: [String], toPlaylistID playlistID: String) async throws -> PlaylistAddResult {
+        throw MusiFixError.appleScriptError("Aggiunta a playlist non supportata da questo bridge")
+    }
 }
 
 /// Seleziona l'implementazione ottimale disponibile a runtime.

@@ -72,6 +72,19 @@ extern NSString * const MBKeyModDate;     // NSDate
 /// @return Array di NSString (persistentID), con possibili duplicati. Nil in errore.
 - (nullable NSArray<NSString *> *)regularPlaylistTrackPersistentIDs:(NSError **)error;
 
+/// Alberatura delle playlist utente modificabili (playlist normali + cartelle).
+/// Ogni elemento è un NSDictionary con chiavi:
+///   @"id" (NSString persistentID), @"name" (NSString),
+///   @"isFolder" (NSNumber BOOL), @"parentID" (NSString o NSNull).
+/// Esclude smart playlist e playlist speciali (Library/Music/Genius).
+- (nullable NSArray<NSDictionary *> *)userPlaylistTree:(NSError **)error;
+
+/// Aggiunge i brani indicati alla playlist (per persistentID), saltando quelli già
+/// presenti. @return NSDictionary con @"added"/@"skipped"/@"failed" (NSNumber). Nil in errore.
+- (nullable NSDictionary *)addTracksWithPersistentIDs:(NSArray<NSString *> *)pids
+                          toPlaylistWithPersistentID:(NSString *)playlistID
+                                               error:(NSError **)error;
+
 @end
 
 NS_ASSUME_NONNULL_END

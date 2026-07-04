@@ -96,6 +96,8 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 @property (readonly) MusicEClS cloudStatus;
 - (SBElementArray<MusicArtwork *> *)artworks;
 - (void)delete;
+/// Duplica il track in un contenitore (es. una playlist); restituisce la nuova traccia.
+- (SBObject *)duplicateTo:(SBObject *)to;
 - (id)get;
 @end
 
@@ -113,8 +115,11 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 // ────────────────────────────────────────────────
 @interface MusicUserPlaylist : SBObject
 @property (copy, readonly) NSString *name;
+@property (copy, readonly) NSString *persistentID;
 @property (readonly) BOOL smart;
 @property (readonly) MusicESpK specialKind;
+/// Cartella contenitore (nil / missing value se la playlist è al livello radice).
+@property (copy, readonly) MusicUserPlaylist *parent;
 - (SBElementArray<MusicTrack *> *)tracks;
 - (id)get;
 @end

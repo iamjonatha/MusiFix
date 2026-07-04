@@ -321,6 +321,96 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
     }
 }
 
+// ─── playlist tree + add ──────────────────────────────────────────────────────
+
+- (nullable MusicUserPlaylist *)userPlaylistWithPersistentID:(NSString *)pid {
+    NSPredicate *pred = [NSPredicate predicateWithFormat:@"persistentID == %@", pid];
+    SBElementArray<MusicUserPlaylist *> *filtered =
+        (SBElementArray<MusicUserPlaylist *> *)[[_app userPlaylists] filteredArrayUsingPredicate:pred];
+    return filtered.count > 0 ? filtered[0] : nil;
+}
+
+- (nullable NSArray<NSDictionary *> *)userPlaylistTree:(NSError **)error {
+    @try {
+        SBElementArray<MusicUserPlaylist *> *playlists = [_app userPlaylists];
+        if (!playlists) {
+            if (error) *error = bridgeError(11, @"Impossibile ottenere le playlist utente");
+            return nil;
+        }
+        NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
+        for (MusicUserPlaylist *pl in playlists) {
+            @try {
+                MusicESpK kind = pl.specialKind;
+                BOOL isFolder = (kind == MusicESpKFolder);
+                // Includiamo cartelle e playlist normali; saltiamo smart e speciali.
+                if (!isFolder) {
+                    if (pl.smart) continue;
+                    if (kind != MusicESpKNone) continue;
+                }
+                NSString *pid = pl.persistentID ?: @"";
+                if (pid.length == 0) continue;
+                // parent: può lanciare / essere missing value se al livello radice.
+                NSString *parentID = nil;
+                @try {
+                    MusicUserPlaylist *parent = pl.parent;
+                    if (parent) parentID = parent.persistentID;
+                } @catch (NSException *pe) { parentID = nil; }
+                [result addObject:@{
+                    @"id": pid,
+                    @"name": pl.name ?: @"",
+                    @"isFolder": @(isFolder),
+                    @"parentID": parentID ?: (id)[NSNull null],
+                }];
+            } @catch (NSException *inner) {
+                NSLog(@"[MusicBridge] playlist saltata (tree): %@", inner.reason ?: @"?");
+            }
+        }
+        return [result copy];
+    } @catch (NSException *ex) {
+        if (error) *error = bridgeError(12, ex.reason ?: @"Eccezione enumerazione playlist");
+        return nil;
+    }
+}
+
+- (nullable NSDictionary *)addTracksWithPersistentIDs:(NSArray<NSString *> *)pids
+                          toPlaylistWithPersistentID:(NSString *)playlistID
+                                               error:(NSError **)error {
+    @try {
+        MusicUserPlaylist *pl = [self userPlaylistWithPersistentID:playlistID];
+        if (!pl) {
+            if (error) *error = bridgeError(13, @"Playlist non trovata");
+            return nil;
+        }
+        // Non si aggiungono brani a smart playlist, cartelle o playlist speciali.
+        if (pl.smart || pl.specialKind != MusicESpKNone) {
+            if (error) *error = bridgeError(14, @"Impossibile aggiungere brani a questa playlist");
+            return nil;
+        }
+        // Membership già presente: un solo Apple Event.
+        NSArray *existingPids = [[pl tracks] arrayByApplyingSelector:@selector(persistentID)];
+        NSSet *existing = [NSSet setWithArray:(existingPids ?: @[])];
+
+        NSInteger added = 0, skipped = 0, failed = 0;
+        for (NSString *pid in pids) {
+            if ([pid isKindOfClass:[NSString class]] == NO) { failed++; continue; }
+            if ([existing containsObject:pid]) { skipped++; continue; }
+            MusicTrack *t = [self trackWithPersistentID:pid];
+            if (!t) { failed++; continue; }
+            @try {
+                [t duplicateTo:pl];
+                added++;
+            } @catch (NSException *de) {
+                NSLog(@"[MusicBridge] duplicate fallito per %@: %@", pid, de.reason ?: @"?");
+                failed++;
+            }
+        }
+        return @{@"added": @(added), @"skipped": @(skipped), @"failed": @(failed)};
+    } @catch (NSException *ex) {
+        if (error) *error = bridgeError(15, ex.reason ?: @"Eccezione aggiunta a playlist");
+        return nil;
+    }
+}
+
 - (BOOL)revealInMusicForPersistentID:(NSString *)pid error:(NSError **)error {
     @try {
         MusicTrack *t = [self trackForReveal:pid];

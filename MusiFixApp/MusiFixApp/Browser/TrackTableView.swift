@@ -30,6 +30,10 @@ struct TrackTableView: NSViewRepresentable {
     var onSetAlbumIgnore: (DBTrack, Bool) -> Void = { _, _ in }
     /// Apre la ricerca Google embedded per il brano indicato.
     var onWebSearch: (DBTrack) -> Void = { _ in }
+    /// Passa alla vista album posizionandosi sull'album del brano indicato.
+    var onOpenAlbumView: (DBTrack) -> Void = { _ in }
+    /// (pids, playlistID) — aggiunge i brani selezionati alla playlist indicata.
+    var onAddToPlaylist: ([String], String) -> Void = { _, _ in }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -78,6 +82,8 @@ struct TrackTableView: NSViewRepresentable {
         context.coordinator.onSetIgnore = onSetIgnore
         context.coordinator.onSetAlbumIgnore = onSetAlbumIgnore
         context.coordinator.onWebSearch = onWebSearch
+        context.coordinator.onOpenAlbumView = onOpenAlbumView
+        context.coordinator.onAddToPlaylist = onAddToPlaylist
         context.coordinator.highlightNotInPlaylist = displaySettings.highlightNotInPlaylist
         context.coordinator.highlightMissingArtwork = displaySettings.highlightMissingArtwork
         let tv = context.coordinator.tableView
@@ -132,6 +138,8 @@ struct TrackTableView: NSViewRepresentable {
         c.onSetIgnore = onSetIgnore
         c.onSetAlbumIgnore = onSetAlbumIgnore
         c.onWebSearch = onWebSearch
+        c.onOpenAlbumView = onOpenAlbumView
+        c.onAddToPlaylist = onAddToPlaylist
         return c
     }
 
@@ -156,6 +164,8 @@ struct TrackTableView: NSViewRepresentable {
         var onSetIgnore: ([String], Bool) -> Void = { _, _ in }
         var onSetAlbumIgnore: (DBTrack, Bool) -> Void = { _, _ in }
         var onWebSearch: (DBTrack) -> Void = { _ in }
+        var onOpenAlbumView: (DBTrack) -> Void = { _ in }
+        var onAddToPlaylist: ([String], String) -> Void = { _, _ in }
         private var menuTargetPIDs: [String] = []
         private var menuTargetTrack: DBTrack?
         private var menuIgnoreTracksToOn = true
@@ -211,6 +221,17 @@ struct TrackTableView: NSViewRepresentable {
             googleItem.target = self
             menu.addItem(googleItem)
 
+            // Passa alla vista album (per editing massivo per album).
+            if !clickedTrack.album.isEmpty {
+                let albumViewItem = NSMenuItem(
+                    title: "Passa a vista album",
+                    action: #selector(openAlbumViewAction(_:)),
+                    keyEquivalent: ""
+                )
+                albumViewItem.target = self
+                menu.addItem(albumViewItem)
+            }
+
             // ── Azioni su selezione: "- Single" ─────────────────────────────────
             // Usa la selezione corrente; se il click è fuori dalla selezione,
             // opera sulla sola riga cliccata.
@@ -240,6 +261,9 @@ struct TrackTableView: NSViewRepresentable {
                 )
                 posItem.target = self
                 menu.addItem(posItem)
+
+                // ── Aggiungi a playlist (con cartelle) ──────────────────────────
+                addPlaylistSubmenu(to: menu)
             }
 
             // ── Ignora in MusiFix (brano + album) ───────────────────────────────
@@ -289,6 +313,74 @@ struct TrackTableView: NSViewRepresentable {
         @objc func webSearchAction(_ sender: NSMenuItem) {
             guard let t = menuTargetTrack else { return }
             onWebSearch(t)
+        }
+
+        @objc func openAlbumViewAction(_ sender: NSMenuItem) {
+            guard let t = menuTargetTrack else { return }
+            onOpenAlbumView(t)
+        }
+
+        // ── Aggiungi a playlist ────────────────────────────────────────────────
+
+        /// Inserisce la voce "Aggiungi a playlist ▸" con la gerarchia di cartelle.
+        private func addPlaylistSubmenu(to menu: NSMenu) {
+            let playlists = viewModel.playlists
+            let item = NSMenuItem(title: "Aggiungi a playlist", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            if playlists.isEmpty {
+                let empty = NSMenuItem(
+                    title: "Nessuna playlist (usa \u{201C}Aggiorna elenco\u{201D})",
+                    action: nil, keyEquivalent: "")
+                empty.isEnabled = false
+                submenu.addItem(empty)
+            } else {
+                // Ricostruisce la gerarchia dai parentID.
+                var childrenByParent: [String: [MusicPlaylistNode]] = [:]
+                for node in playlists {
+                    childrenByParent[node.parentID ?? "", default: []].append(node)
+                }
+                buildPlaylistItems(parentID: "", into: submenu, childrenByParent: childrenByParent)
+            }
+            item.submenu = submenu
+            menu.addItem(item)
+        }
+
+        /// Costruisce ricorsivamente le voci playlist/cartella di un livello.
+        private func buildPlaylistItems(
+            parentID: String,
+            into menu: NSMenu,
+            childrenByParent: [String: [MusicPlaylistNode]]
+        ) {
+            let nodes = (childrenByParent[parentID] ?? [])
+                .sorted { a, b in
+                    if a.isFolder != b.isFolder { return a.isFolder && !b.isFolder }  // cartelle in cima
+                    return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+                }
+            for node in nodes {
+                if node.isFolder {
+                    let folderItem = NSMenuItem(title: node.name, action: nil, keyEquivalent: "")
+                    let sub = NSMenu()
+                    buildPlaylistItems(parentID: node.id, into: sub, childrenByParent: childrenByParent)
+                    if sub.items.isEmpty {
+                        let empty = NSMenuItem(title: "(vuota)", action: nil, keyEquivalent: "")
+                        empty.isEnabled = false
+                        sub.addItem(empty)
+                    }
+                    folderItem.submenu = sub
+                    menu.addItem(folderItem)
+                } else {
+                    let plItem = NSMenuItem(
+                        title: node.name, action: #selector(addToPlaylistAction(_:)), keyEquivalent: "")
+                    plItem.target = self
+                    plItem.representedObject = node.id
+                    menu.addItem(plItem)
+                }
+            }
+        }
+
+        @objc func addToPlaylistAction(_ sender: NSMenuItem) {
+            guard let playlistID = sender.representedObject as? String, !menuTargetPIDs.isEmpty else { return }
+            onAddToPlaylist(menuTargetPIDs, playlistID)
         }
 
         @objc func markAsSingleAction(_ sender: NSMenuItem) {

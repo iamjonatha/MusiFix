@@ -20,6 +20,8 @@ struct ContentView: View {
     @State private var showDeletion = false
 
     enum ViewMode { case tracks, albums }
+    /// Album su cui posizionarsi passando alla vista album dal menu contestuale brani.
+    @State private var albumFocusKey: String?
     @State private var showDivergence = false
     @State private var showEditor = true
     @State private var availableGenres: [String] = []
@@ -30,6 +32,9 @@ struct ContentView: View {
     @State private var setPosition1of1PIDs: [String] = []
     @State private var showSetPosition1of1Confirm = false
     @State private var webSearchTarget: WebSearchTarget?
+    @State private var playlistFeedback: String?
+    @State private var playlistScanDone = true
+    @State private var artworkScanDone = true
 
     var selectedTrack: DBTrack? {
         guard browser.selectedPIDs.count == 1 else { return nil }
@@ -306,16 +311,33 @@ struct ContentView: View {
 
                 Divider().frame(height: 16)
 
-                // Filtro non in playlist
-                Button {
-                    browser.filter = (browser.filter == .notInAnyPlaylist) ? .none : .notInAnyPlaylist
-                    browser.loadInitialPage(db: appState.db)
+                // Filtro non in playlist (con opzione "solo singoli/album incompleti")
+                Menu {
+                    Button {
+                        browser.filter = (browser.filter == .notInAnyPlaylist) ? .none : .notInAnyPlaylist
+                        browser.loadInitialPage(db: appState.db)
+                    } label: {
+                        Label("Non in nessuna playlist", systemImage:
+                            browser.filter == .notInAnyPlaylist ? "checkmark" : "list.bullet.rectangle")
+                    }
+                    Button {
+                        browser.filter = (browser.filter == .notInPlaylistIncompleteOnly)
+                            ? .none : .notInPlaylistIncompleteOnly
+                        browser.loadInitialPage(db: appState.db)
+                    } label: {
+                        Label("Solo singoli / album incompleti", systemImage:
+                            browser.filter == .notInPlaylistIncompleteOnly ? "checkmark" : "rectangle.stack.badge.minus")
+                    }
                 } label: {
                     Image(systemName: "list.bullet.rectangle")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(browser.filter == .notInAnyPlaylist ? Color.accentColor : Color.secondary)
-                .help("Mostra solo i brani che non appartengono a nessuna playlist normale (richiede \u{201C}Scansiona playlist\u{201D})")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(
+                    (browser.filter == .notInAnyPlaylist || browser.filter == .notInPlaylistIncompleteOnly)
+                        ? Color.accentColor : Color.secondary)
+                .help("Brani non in playlist. La seconda voce esclude i brani di album completi (richiede \u{201C}Scansiona playlist\u{201D}).")
 
                 Divider().frame(height: 16)
 
@@ -392,9 +414,16 @@ struct ContentView: View {
                         },
                         onSetIgnore: { pids, ignore in setIgnore(pids: pids, ignore: ignore) },
                         onSetAlbumIgnore: { track, ignore in setAlbumIgnore(track: track, ignore: ignore) },
-                        onWebSearch: { track in webSearchTarget = WebSearchTarget(track: track) }
+                        onWebSearch: { track in webSearchTarget = WebSearchTarget(track: track) },
+                        onOpenAlbumView: { track in
+                            albumFocusKey = IgnoreService.albumKey(
+                                albumArtist: track.albumArtist, artist: track.artist, album: track.album)
+                            viewMode = .albums
+                        },
+                        onAddToPlaylist: { pids, playlistID in addToPlaylist(pids: pids, playlistID: playlistID) }
                     )
                     .frame(minWidth: 500)
+                    .overlay { scanHintOverlay }
 
                     if showEditor, let track = selectedTrack {
                         TrackEditorPanel(
@@ -412,7 +441,7 @@ struct ContentView: View {
                     browser.filter = .album(album)
                     browser.loadInitialPage(db: appState.db)
                     viewMode = .tracks
-                })
+                }, searchText: searchText, focusAlbumKey: albumFocusKey)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
@@ -446,10 +475,15 @@ struct ContentView: View {
             }) ?? []
             reloadIgnored()
             reloadHighlightSets()
+            reloadPlaylists()
+            reloadScanStatus()
         }
         .onChange(of: appState.isIndexing) { _, indexing in
             // A fine scansione (playlist/copertine) ricarica le set di evidenziazione.
-            if !indexing { reloadHighlightSets() }
+            if !indexing {
+                reloadHighlightSets()
+                reloadScanStatus()
+            }
         }
         .sheet(isPresented: $showBatchEditor) {
             BatchEditorView(
@@ -514,6 +548,13 @@ struct ContentView: View {
         .sheet(item: $webSearchTarget) { target in
             WebSearchSheet(track: target.track) { webSearchTarget = nil }
         }
+        .alert("Aggiunta a playlist", isPresented: Binding(
+            get: { playlistFeedback != nil }, set: { if !$0 { playlistFeedback = nil } }
+        )) {
+            Button("OK", role: .cancel) { playlistFeedback = nil }
+        } message: {
+            Text(playlistFeedback ?? "")
+        }
         .confirmationDialog(
             markSinglePIDs.count == 1
                 ? "Aggiungere \u{201C}- Single\u{201D} all'album del brano selezionato?"
@@ -551,6 +592,70 @@ struct ContentView: View {
         Task {
             _ = try? await appState.albumService.markAsSingle(pids: pids)
             browser.loadInitialPage(db: appState.db)
+        }
+    }
+
+    /// Overlay istruttivo quando un filtro richiede una scansione non ancora eseguita.
+    @ViewBuilder
+    private var scanHintOverlay: some View {
+        if browser.tracks.isEmpty {
+            if (browser.filter == .notInAnyPlaylist || browser.filter == .notInPlaylistIncompleteOnly),
+               !playlistScanDone {
+                scanHint(icon: "list.bullet.rectangle",
+                         text: "Per elencare i brani non in playlist esegui prima \u{201C}Scansiona playlist\u{201D}.",
+                         button: "Scansiona playlist") { appState.startPlaylistScan() }
+            } else if browser.filter == .missingArtwork, !artworkScanDone {
+                scanHint(icon: "photo.badge.exclamationmark",
+                         text: "Per filtrare i brani senza copertina esegui prima \u{201C}Scansiona copertine\u{201D}.",
+                         button: "Scansiona copertine") { appState.startArtworkScan() }
+            }
+        }
+    }
+
+    private func scanHint(icon: String, text: String, button: String,
+                          action: @escaping () -> Void) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 34)).foregroundStyle(.secondary)
+            Text(text)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 320)
+            Button(button, action: action)
+                .buttonStyle(.borderedProminent)
+                .disabled(appState.isIndexing)
+        }
+        .padding(28)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// Aggiorna i flag "scansione eseguita" per gli empty-state guidati.
+    private func reloadScanStatus() {
+        playlistScanDone = (try? appState.db.read { try TrackDAO.playlistScanDone(in: $0) }) ?? true
+        artworkScanDone = (try? appState.db.read { try TrackDAO.artworkScanDone(in: $0) }) ?? true
+    }
+
+    /// Ricarica l'elenco delle playlist utente per il menu "Aggiungi a playlist".
+    private func reloadPlaylists() {
+        Task {
+            let tree = (try? await appState.playlistService.playlistTree()) ?? []
+            await MainActor.run { browser.playlists = tree }
+        }
+    }
+
+    /// Aggiunge i brani indicati alla playlist scelta e mostra l'esito (con de-dup).
+    private func addToPlaylist(pids: [String], playlistID: String) {
+        Task {
+            do {
+                let r = try await appState.playlistService.addTracks(pids, toPlaylistID: playlistID)
+                var parts: [String] = []
+                if r.added > 0   { parts.append("\(r.added) aggiunti") }
+                if r.skipped > 0 { parts.append("\(r.skipped) già presenti") }
+                if r.failed > 0  { parts.append("\(r.failed) non riusciti") }
+                let msg = parts.isEmpty ? "Nessuna modifica." : parts.joined(separator: ", ") + "."
+                await MainActor.run { playlistFeedback = msg }
+            } catch {
+                await MainActor.run { playlistFeedback = "Errore: \(error.localizedDescription)" }
+            }
         }
     }
 
@@ -620,6 +725,7 @@ private func filterLabel(for filter: TrackFilter) -> String {
     case .yearRange(let from, let to): return "Anni: \(from)–\(to)"
     case .ignored:                 return "Ignorati in MusiFix"
     case .notInAnyPlaylist:        return "Non in nessuna playlist"
+    case .notInPlaylistIncompleteOnly: return "Non in playlist (solo singoli/album incompleti)"
     }
 }
 

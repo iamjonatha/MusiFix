@@ -10,6 +10,10 @@ struct AlbumsView: View {
     let appState: AppState
     /// Apre i brani dell'album nel browser (filtra + passa alla vista brani).
     var onOpenTracks: (String) -> Void
+    /// Testo di ricerca condiviso con la toolbar (filtra album per titolo/artista).
+    var searchText: String = ""
+    /// Chiave album su cui posizionarsi/selezionarsi all'apertura (da "Passa a vista album").
+    var focusAlbumKey: String? = nil
 
     @State private var albums: [AlbumGroup] = []
     @State private var storeInfo: [String: DBAlbumStoreInfo] = [:]
@@ -41,12 +45,19 @@ struct AlbumsView: View {
     }
 
     private var filtered: [AlbumGroup] {
+        let byCategory: [AlbumGroup]
         switch filter {
-        case .all:        return albums
-        case .incomplete: return albums.filter { $0.completeness == .incomplete }
-        case .unknown:    return albums.filter { $0.completeness == .unknown }
-        case .complete:   return albums.filter { $0.completeness == .complete }
-        case .mixedCloud: return albums.filter { $0.hasMixedCloudStatus }
+        case .all:        byCategory = albums
+        case .incomplete: byCategory = albums.filter { $0.completeness == .incomplete }
+        case .unknown:    byCategory = albums.filter { $0.completeness == .unknown }
+        case .complete:   byCategory = albums.filter { $0.completeness == .complete }
+        case .mixedCloud: byCategory = albums.filter { $0.hasMixedCloudStatus }
+        }
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return byCategory }
+        return byCategory.filter {
+            $0.album.localizedCaseInsensitiveContains(q) ||
+            $0.albumArtist.localizedCaseInsensitiveContains(q)
         }
     }
 
@@ -110,9 +121,11 @@ struct AlbumsView: View {
                 Text("Nessun album in questa categoria.").foregroundStyle(.secondary).padding(.top, 4)
                 Spacer()
             } else {
+                ScrollViewReader { proxy in
                 List(filtered, selection: $selection) { album in
                     AlbumRow(album: album, store: storeInfo[album.key], bridge: appState.bridge,
                              isIgnored: ignoredAlbumKeys.contains(album.key))
+                        .id(album.key)
                         .contentShape(Rectangle())
                         .onTapGesture(count: 2) { onOpenTracks(album.album) }
                         .contextMenu {
@@ -130,6 +143,11 @@ struct AlbumsView: View {
                                 Button("Ignora album in MusiFix") { setAlbumIgnore(album, ignore: true) }
                             }
                         }
+                }
+                .onChange(of: focusAlbumKey) { _, key in focus(key, proxy: proxy) }
+                .onChange(of: isLoading) { _, loading in
+                    if !loading { focus(focusAlbumKey, proxy: proxy) }
+                }
                 }
             }
 
@@ -163,6 +181,13 @@ struct AlbumsView: View {
                                 onClose: { batchEditAlbums = nil },
                                 onApplied: { batchEditAlbums = nil; load() })
         }
+    }
+
+    /// Seleziona e scrolla all'album indicato (usato da "Passa a vista album").
+    private func focus(_ key: String?, proxy: ScrollViewProxy) {
+        guard let key, albums.contains(where: { $0.key == key }) else { return }
+        selection = [key]
+        withAnimation { proxy.scrollTo(key, anchor: .center) }
     }
 
     /// Apre lo sheet di editing per gli album attualmente selezionati.
