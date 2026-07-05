@@ -184,7 +184,7 @@ pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
 | **16** | Ricerca web nell'editor (Google + Wikipedia, finestra interna) | Bassa | Sì (WebView) | 14 | ✅ |
 | **17** | Copia file del brano (se scaricato) in cartella a scelta | Bassa | No | — | ✅ |
 | **18** | Playlist "Da verificare" → WORK/ToCheck (crea se assente) | Media | No | — | ✅ |
-| **19** | Playlist per brano + Vista Playlist + copia file cartella | Alta | No | 17, 18 | ⬜ |
+| **19** | Playlist per brano + Vista Playlist + copia file cartella | Alta | No | 17, 18 | ✅ |
 | **20** | Sincronizzazione automatica in background | Media | No | — | ⬜ |
 
 ### Fase 16 — Ricerca web nell'editor ✅
@@ -203,7 +203,10 @@ pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
 - UI: menu contestuale "Segna come da verificare (WORK/ToCheck)" + pulsante editor; feedback via alert playlist esistente.
 - **File:** `MusicBridgeObjC.{h,m}`, `AppleMusicBridge.swift`, `ScriptingBridgeImpl.swift`, `PlaylistService.swift`, `ContentView.swift`, `TrackTableView.swift`, `TrackEditorPanel.swift`.
 
-### Fase 19 — Playlist per brano + Vista Playlist ⬜
+### Fase 19 — Playlist per brano + Vista Playlist ✅
+> Nota: "Scansiona playlist" ora esegue la scansione *dettagliata* (`scanPlaylistFull`),
+> che popola anche `playlist`/`playlist_track` oltre al flag `inPlaylist`.
+
 - Bridge: `playlistMembership` → per ogni playlist normale/cartella: id, nome, parentID, isFolder, `trackIDs`. Un solo passaggio (bulk `arrayByApplyingSelector`).
 - Migrazione **v11**: tabelle `playlist(id, name, parentID, isFolder, scannedAt)` e `playlist_track(playlistID, pid)` + indici; struct DB relative.
 - `IndexService.scanPlaylistFull()` popola le due tabelle; pulsante/uso condiviso con "Scansiona playlist".

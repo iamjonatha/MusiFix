@@ -28,6 +28,7 @@ struct TrackEditorPanel: View {
     @State private var showYearResolution = false
     @State private var webSearch: WebSearchTarget? = nil
     @State private var actionNote: String? = nil
+    @State private var trackPlaylists: [String] = []
 
     var hasChanges: Bool {
         name != track.name || artist != track.artist ||
@@ -98,6 +99,22 @@ struct TrackEditorPanel: View {
                         EditorField("Disco", $discNumberText).frame(maxWidth: .infinity)
                         Text("/").foregroundStyle(.tertiary)
                         EditorField("", $discCountText).frame(maxWidth: .infinity)
+                    }
+
+                    if !trackPlaylists.isEmpty {
+                        Divider().padding(.vertical, 2)
+                        Text("In playlist").font(.caption2).foregroundStyle(.secondary)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 4) {
+                                ForEach(trackPlaylists, id: \.self) { name in
+                                    Text(name)
+                                        .font(.caption2)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(Color.accentColor.opacity(0.12))
+                                        .clipShape(Capsule())
+                                }
+                            }
+                        }
                     }
 
                     if let err = lastError {
@@ -268,6 +285,9 @@ struct TrackEditorPanel: View {
         lastError = nil
         lastSuccess = false
         actionNote = nil
+        trackPlaylists = (try? appState.db.read { db in
+            try PlaylistDAO.playlistNamesForTrack(pid: track.persistentID, in: db)
+        }) ?? []
     }
 
     private func copyFileToFolder() {

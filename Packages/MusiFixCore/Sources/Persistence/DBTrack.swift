@@ -180,6 +180,21 @@ public struct DBAlbumIgnore: Codable, FetchableRecord, PersistableRecord, Sendab
     }
 }
 
+/// Playlist/cartella utente (Fase 19), popolata dalla scansione playlist.
+public struct DBPlaylist: Codable, FetchableRecord, PersistableRecord, Sendable, Identifiable {
+    public static let databaseTableName = "playlist"
+    public var id: String
+    public var name: String
+    public var parentID: String?
+    public var isFolder: Bool
+    public var scannedAt: Date
+
+    public init(id: String, name: String, parentID: String?, isFolder: Bool, scannedAt: Date = Date()) {
+        self.id = id; self.name = name; self.parentID = parentID
+        self.isFolder = isFolder; self.scannedAt = scannedAt
+    }
+}
+
 public struct DBOperation: Codable, FetchableRecord, PersistableRecord, Sendable {
     public static let databaseTableName = "operation_log"
     public var id: Int64?

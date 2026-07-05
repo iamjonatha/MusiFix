@@ -494,6 +494,56 @@ public actor IndexService {
         return marked
     }
 
+    /// Scansione playlist *dettagliata* (Fase 19): popola le tabelle `playlist` e
+    /// `playlist_track` (playlist per brano + Vista Playlist) e, contestualmente,
+    /// aggiorna il flag `inPlaylist` sui brani (union dei membri di playlist normali).
+    /// Sostituisce `scanPlaylistMembership` come scansione predefinita.
+    @discardableResult
+    public func scanPlaylistFull() async throws -> Int {
+        log.info("Scansione playlist dettagliata avviata")
+        setProgress(.init(phase: .fetchingFromMusic, processed: 0, total: 0, lastSyncDate: nil))
+
+        let membership = try await bridge.playlistMembership()
+        let now = Date()
+        let playlists = membership.map {
+            DBPlaylist(id: $0.node.id, name: $0.node.name,
+                       parentID: $0.node.parentID, isFolder: $0.node.isFolder, scannedAt: now)
+        }
+        // Coppie (playlist, brano) solo per le playlist non-cartella.
+        var members: [(playlistID: String, pid: String)] = []
+        var inAny = Set<String>()
+        for m in membership where !m.node.isFolder {
+            for pid in m.trackIDs {
+                members.append((m.node.id, pid))
+                inAny.insert(pid)
+            }
+        }
+        let memberArray = Array(inAny)
+        let membersSnapshot = members
+
+        let marked = try db.write { db -> Int in
+            try PlaylistDAO.replaceAll(playlists: playlists, members: membersSnapshot, in: db)
+            // Flag inPlaylist (coerente con scanPlaylistMembership).
+            try db.execute(sql: "UPDATE track SET inPlaylist = 0")
+            var updated = 0
+            let chunkSize = 900
+            var i = 0
+            while i < memberArray.count {
+                let chunk = Array(memberArray[i..<min(i + chunkSize, memberArray.count)])
+                let ph = chunk.map { _ in "?" }.joined(separator: ",")
+                try db.execute(sql: "UPDATE track SET inPlaylist = 1 WHERE persistentID IN (\(ph))",
+                               arguments: StatementArguments(chunk.map { DatabaseValue(value: $0) }))
+                updated += db.changesCount
+                i += chunkSize
+            }
+            return updated
+        }
+
+        setProgress(.init(phase: .done, processed: marked, total: marked, lastSyncDate: nil))
+        log.info("Scansione playlist dettagliata completata: \(playlists.count) playlist, \(marked) brani in playlist")
+        return marked
+    }
+
     // ── Scansione stato iCloud (cloudStatus) ──────────────────────────────────
 
     /// Popola la colonna `cloudStatus` leggendo lo stato iCloud reale da Music

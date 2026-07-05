@@ -108,7 +108,7 @@ final class AppState: ObservableObject {
         isIndexing = true
         indexTask = Task {
             do {
-                let n = try await indexService.scanPlaylistMembership()
+                let n = try await indexService.scanPlaylistFull()
                 print("Scansione playlist completata: \(n) brani in playlist")
             }
             catch is CancellationError { print("Scansione playlist annullata") }

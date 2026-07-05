@@ -15,6 +15,28 @@ public enum Migrations {
         migrator.registerMigration("v8_perf_indexes", migrate: v8_perf_indexes)
         migrator.registerMigration("v9_musifix_ignore", migrate: v9_musifix_ignore)
         migrator.registerMigration("v10_playlist_membership", migrate: v10_playlist_membership)
+        migrator.registerMigration("v11_playlist_tables", migrate: v11_playlist_tables)
+    }
+
+    // ── v11: playlist dettagliate (Fase 19) ───────────────────────────────────
+    private static func v11_playlist_tables(_ db: Database) throws {
+        // Anagrafica playlist/cartelle utente (escluse smart), popolata dalla
+        // scansione playlist. `parentID` ricostruisce la gerarchia delle cartelle.
+        try db.create(table: "playlist") { t in
+            t.primaryKey("id", .text)                 // persistentID Music
+            t.column("name", .text).notNull().defaults(to: "")
+            t.column("parentID", .text)               // cartella contenitore, se presente
+            t.column("isFolder", .boolean).notNull().defaults(to: false)
+            t.column("scannedAt", .datetime).notNull()
+        }
+        // Appartenenza brano↔playlist (molti-a-molti).
+        try db.create(table: "playlist_track") { t in
+            t.column("playlistID", .text).notNull()
+            t.column("pid", .text).notNull()
+            t.primaryKey(["playlistID", "pid"])
+        }
+        try db.create(index: "playlist_track_pid", on: "playlist_track", columns: ["pid"])
+        try db.create(index: "playlist_track_pl", on: "playlist_track", columns: ["playlistID"])
     }
 
     // ── v10: appartenenza a playlist normali (Fase 15) ────────────────────────

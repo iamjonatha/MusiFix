@@ -19,7 +19,7 @@ struct ContentView: View {
     @State private var viewMode: ViewMode = .tracks
     @State private var showDeletion = false
 
-    enum ViewMode { case tracks, albums }
+    enum ViewMode { case tracks, albums, playlists }
     /// Album su cui posizionarsi passando alla vista album dal menu contestuale brani.
     @State private var albumFocusKey: String?
     @State private var showDivergence = false
@@ -101,10 +101,11 @@ struct ContentView: View {
                 Picker("", selection: $viewMode) {
                     Image(systemName: "music.note.list").tag(ViewMode.tracks)
                     Image(systemName: "square.stack").tag(ViewMode.albums)
+                    Image(systemName: "list.bullet.rectangle.portrait").tag(ViewMode.playlists)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 90)
-                .help("Alterna vista brani / album")
+                .frame(width: 120)
+                .help("Alterna vista brani / album / playlist")
 
                 Button { showDuplicates = true } label: {
                     Image(systemName: "doc.on.doc")
@@ -445,6 +446,15 @@ struct ContentView: View {
                     browser.loadInitialPage(db: appState.db)
                     viewMode = .tracks
                 }, searchText: searchText, focusAlbumKey: albumFocusKey)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .playlists:
+                PlaylistsView(
+                    appState: appState,
+                    onCopyFiles: { pids, playlistName in
+                        copyFiles(pids: pids, defaultFolderName: playlistName)
+                    },
+                    onScanRequested: { appState.startPlaylistScan() }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
