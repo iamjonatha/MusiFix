@@ -172,5 +172,51 @@ Multi-disco: escluso dai fix automatici; la Fase G2 supporta multi-disco in modo
 - Evidenziazione condizionale di riga (`HighlightRowView`): "Non in playlist" (arancione) e "Senza copertina" (blu), con toggle nel popover impostazioni tabella; set caricate in `ContentView` (`TrackDAO.fetchNotInPlaylistPIDs`/`fetchMissingArtworkPIDs`) e ricaricate a fine scansione.
 - ⚠️ `inPlaylist`/`hasArtwork` non sono nel modello `DBTrack` (come da design): rieseguire "Scansiona playlist"/"Scansiona copertine" dopo un reindex completo.
 
-## Idee future
-_(nessuna in coda — le 5 evolutive richieste sono completate)_
+## Evolutive (serie 3) — piano dalle idee future
+
+Dalle "idee future". Ambito confermato con l'utente: **implementare tutto**.
+Decisioni prese: playlist di verifica = cartella **WORK** → playlist **ToCheck**;
+pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
+**reindex incrementale + riscansione playlist/copertine**.
+
+| Fase | Funzionalità | Complessità | Rete | Dipende da | Stato |
+|---|---|---|---|---|---|
+| **16** | Ricerca web nell'editor (Google + Wikipedia, finestra interna) | Bassa | Sì (WebView) | 14 | ⬜ |
+| **17** | Copia file del brano (se scaricato) in cartella a scelta | Bassa | No | — | ⬜ |
+| **18** | Playlist "Da verificare" → WORK/ToCheck (crea se assente) | Media | No | — | ⬜ |
+| **19** | Playlist per brano + Vista Playlist + copia file cartella | Alta | No | 17, 18 | ⬜ |
+| **20** | Sincronizzazione automatica in background | Media | No | — | ⬜ |
+
+### Fase 16 — Ricerca web nell'editor ⬜
+- Generalizzare `WebSearchSheet` con un enum `WebSearchEngine` (Google, Wikipedia): query e URL derivati dal brano. Wikipedia via `it.wikipedia.org/w/index.php?search=…` (nessuna API/limite: è la pagina di ricerca standard). Google resta come Fase 14.
+- `TrackEditorPanel`: due pulsanti nella barra strumenti ("Cerca su Google", "Wikipedia") che aprono la finestra interna sul brano corrente.
+- **File:** `ContentView.swift` (WebSearchSheet parametrico), `TrackEditorPanel.swift`.
+
+### Fase 17 — Copia file brano in cartella ⬜
+- `FileCopyService` (core, actor): dato un insieme di pid, copia i file locali esistenti in una cartella destinazione; salta i brani cloud-only / senza file; ritorna esito (copiati/saltati/falliti + conflitti nome risolti con suffisso).
+- UI: menu contestuale "Copia file in cartella…" (selezione) + pulsante nell'editor; `NSOpenPanel` per la cartella; alert riepilogo.
+- **File:** `Packages/.../FileTransfer/FileCopyService.swift` (nuovo), `ContentView.swift`, `Browser/TrackTableView.swift`, `TrackEditorPanel.swift`, `AppState.swift`.
+
+### Fase 18 — Playlist "Da verificare" (WORK/ToCheck) ⬜
+- Bridge ObjC: `ensurePlaylistNamed:inFolderNamed:` → crea (se assenti) cartella `WORK` e playlist `ToCheck` al suo interno, ritorna il persistentID della playlist. Riusa `userPlaylists`, crea via `make new`.
+- `PlaylistService.ensureToCheckPlaylist()` + `markForVerification(pids:)` (ensure + addTracks con de-dup).
+- UI: menu contestuale "Segna come da verificare (WORK/ToCheck)" + pulsante editor; feedback via alert playlist esistente.
+- **File:** `MusicBridgeObjC.{h,m}`, `AppleMusicBridge.swift`, `ScriptingBridgeImpl.swift`, `PlaylistService.swift`, `ContentView.swift`, `TrackTableView.swift`, `TrackEditorPanel.swift`.
+
+### Fase 19 — Playlist per brano + Vista Playlist ⬜
+- Bridge: `playlistMembership` → per ogni playlist normale/cartella: id, nome, parentID, isFolder, `trackIDs`. Un solo passaggio (bulk `arrayByApplyingSelector`).
+- Migrazione **v11**: tabelle `playlist(id, name, parentID, isFolder, scannedAt)` e `playlist_track(playlistID, pid)` + indici; struct DB relative.
+- `IndexService.scanPlaylistFull()` popola le due tabelle; pulsante/uso condiviso con "Scansiona playlist".
+- DAO: `playlistsForTrack(pid)`, `tracksInPlaylist(id)`.
+- UI: `TrackEditorPanel` mostra le playlist (non-smart) del brano come chip; nuova **Vista Playlist** (terzo modo o sheet) con elenco playlist → brani e azione "Copia file in cartella…" (nome cartella proposto = nome playlist, riusa Fase 17).
+- **File:** bridge, migrazioni, `IndexService.swift`, nuovo `PlaylistDAO.swift`, `PlaylistsView.swift`, `ContentView.swift`, `TrackEditorPanel.swift`.
+
+### Fase 20 — Sincronizzazione automatica ⬜
+- Impostazioni (`AppStorage`): `autoSyncEnabled`, `autoSyncMinutes`. `AppState` schedula un `Task` periodico che, se non è già in corso un'indicizzazione, esegue sync incrementale + riscansione playlist e copertine, poi ricarica le set di evidenziazione.
+- UI: popover impostazioni (toggle + intervallo) in toolbar.
+- **File:** `AppState.swift`, `ContentView.swift`.
+
+## Anomalie
+
+- ✅ **Copertina "Cerca online"**: la sheet ora si chiude dopo "Applica a questo brano/album" e l'editor rilegge la copertina con qualche tentativo (la persistenza nella cloud library non è immediata, per questo prima "non sembrava salvata"). Fix in `EnrichmentSearchView.swift` + `ArtworkEditorView.swift`.
+
