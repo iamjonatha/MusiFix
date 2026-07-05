@@ -98,6 +98,16 @@ public final class ScriptingBridgeImpl: AppleMusicBridge, @unchecked Sendable {
             failed: (dict["failed"] as? Int) ?? 0
         )
     }
+
+    // Creazione playlist e membership completa: via NSAppleScript, che gestisce
+    // in modo affidabile `make new … at folder` e l'enumerazione con parent.
+    public func ensurePlaylist(named name: String, inFolder folder: String?) async throws -> String {
+        try await NSAppleScriptImpl().ensurePlaylist(named: name, inFolder: folder)
+    }
+
+    public func playlistMembership() async throws -> [PlaylistMembership] {
+        try await NSAppleScriptImpl().playlistMembership()
+    }
 }
 
 // ─── Track init from ObjC dict ────────────────────────────────────────────────

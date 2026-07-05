@@ -27,6 +27,7 @@ struct TrackEditorPanel: View {
     @State private var showDeletion = false
     @State private var showYearResolution = false
     @State private var webSearch: WebSearchTarget? = nil
+    @State private var actionNote: String? = nil
 
     var hasChanges: Bool {
         name != track.name || artist != track.artist ||
@@ -111,6 +112,13 @@ struct TrackEditorPanel: View {
                             .font(.caption)
                             .foregroundStyle(.green)
                     }
+                    if let note = actionNote {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
+                    }
                 }
                 .padding(12)
             }
@@ -159,6 +167,23 @@ struct TrackEditorPanel: View {
                 .buttonStyle(.borderless)
                 .font(.caption)
                 .help("Cerca su Wikipedia (finestra interna)")
+
+                Button { copyFileToFolder() } label: {
+                    Image(systemName: "square.and.arrow.down.on.square")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .disabled(track.locationPath == nil)
+                .help(track.locationPath == nil
+                      ? "Nessun file locale (brano solo-cloud)"
+                      : "Copia il file del brano in una cartella…")
+
+                Button { markForVerification() } label: {
+                    Image(systemName: "checklist")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .help("Segna come da verificare (playlist WORK/ToCheck)")
 
                 Spacer()
 
@@ -242,6 +267,48 @@ struct TrackEditorPanel: View {
         discCountText   = track.discCount   > 0 ? "\(track.discCount)"   : ""
         lastError = nil
         lastSuccess = false
+        actionNote = nil
+    }
+
+    private func copyFileToFolder() {
+        guard let path = track.locationPath else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Copia qui"
+        panel.message = "Scegli la cartella di destinazione del file"
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        actionNote = "Copio…"
+        Task {
+            do {
+                let r = try await appState.fileCopyService.copyFiles(sourcePaths: [path], to: dest)
+                await MainActor.run {
+                    if r.copied > 0 { actionNote = "File copiato in \u{201C}\(dest.lastPathComponent)\u{201D}." }
+                    else if r.missing > 0 { actionNote = "File non trovato sul disco." }
+                    else { actionNote = "Copia non riuscita." }
+                }
+            } catch {
+                await MainActor.run { actionNote = "Errore copia: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    private func markForVerification() {
+        let pid = track.persistentID
+        actionNote = "Aggiungo a WORK/ToCheck…"
+        Task {
+            do {
+                let r = try await appState.playlistService.markForVerification([pid])
+                await MainActor.run {
+                    actionNote = r.added > 0
+                        ? "Aggiunto a WORK/ToCheck."
+                        : (r.skipped > 0 ? "Già in WORK/ToCheck." : "Nessuna modifica.")
+                }
+            } catch {
+                await MainActor.run { actionNote = "Errore: \(error.localizedDescription)" }
+            }
+        }
     }
 
     private func buildUpdate() -> TrackMetadataUpdate {

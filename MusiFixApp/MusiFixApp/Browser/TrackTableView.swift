@@ -34,6 +34,10 @@ struct TrackTableView: NSViewRepresentable {
     var onOpenAlbumView: (DBTrack) -> Void = { _ in }
     /// (pids, playlistID) — aggiunge i brani selezionati alla playlist indicata.
     var onAddToPlaylist: ([String], String) -> Void = { _, _ in }
+    /// Copia i file locali dei brani indicati in una cartella a scelta.
+    var onCopyFiles: ([String]) -> Void = { _ in }
+    /// Segna i brani indicati come "da verificare" (playlist WORK/ToCheck).
+    var onMarkForVerification: ([String]) -> Void = { _ in }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -84,6 +88,8 @@ struct TrackTableView: NSViewRepresentable {
         context.coordinator.onWebSearch = onWebSearch
         context.coordinator.onOpenAlbumView = onOpenAlbumView
         context.coordinator.onAddToPlaylist = onAddToPlaylist
+        context.coordinator.onCopyFiles = onCopyFiles
+        context.coordinator.onMarkForVerification = onMarkForVerification
         context.coordinator.highlightNotInPlaylist = displaySettings.highlightNotInPlaylist
         context.coordinator.highlightMissingArtwork = displaySettings.highlightMissingArtwork
         let tv = context.coordinator.tableView
@@ -140,6 +146,8 @@ struct TrackTableView: NSViewRepresentable {
         c.onWebSearch = onWebSearch
         c.onOpenAlbumView = onOpenAlbumView
         c.onAddToPlaylist = onAddToPlaylist
+        c.onCopyFiles = onCopyFiles
+        c.onMarkForVerification = onMarkForVerification
         return c
     }
 
@@ -166,7 +174,10 @@ struct TrackTableView: NSViewRepresentable {
         var onWebSearch: (DBTrack, WebSearchEngine) -> Void = { _, _ in }
         var onOpenAlbumView: (DBTrack) -> Void = { _ in }
         var onAddToPlaylist: ([String], String) -> Void = { _, _ in }
+        var onCopyFiles: ([String]) -> Void = { _ in }
+        var onMarkForVerification: ([String]) -> Void = { _ in }
         private var menuTargetPIDs: [String] = []
+        private var menuTargetTracks: [DBTrack] = []
         private var menuTargetTrack: DBTrack?
         private var menuIgnoreTracksToOn = true
         private var menuAlbumIgnoreToOn = true
@@ -247,7 +258,8 @@ struct TrackTableView: NSViewRepresentable {
             if tv.clickedRow >= 0, !rows.contains(tv.clickedRow) {
                 rows = IndexSet(integer: tv.clickedRow)
             }
-            menuTargetPIDs = rows.compactMap { track(atRow: $0)?.persistentID }
+            menuTargetTracks = rows.compactMap { track(atRow: $0) }
+            menuTargetPIDs = menuTargetTracks.map { $0.persistentID }
             if !menuTargetPIDs.isEmpty {
                 menu.addItem(.separator())
                 let singleItem = NSMenuItem(
@@ -272,6 +284,31 @@ struct TrackTableView: NSViewRepresentable {
 
                 // ── Aggiungi a playlist (con cartelle) ──────────────────────────
                 addPlaylistSubmenu(to: menu)
+
+                // ── Segna come "da verificare" (playlist WORK/ToCheck) ──────────
+                let verifyItem = NSMenuItem(
+                    title: menuTargetPIDs.count == 1
+                        ? "Segna come da verificare"
+                        : "Segna come da verificare (\(menuTargetPIDs.count) brani)",
+                    action: #selector(markForVerificationAction(_:)),
+                    keyEquivalent: ""
+                )
+                verifyItem.target = self
+                menu.addItem(verifyItem)
+
+                // ── Copia file in cartella (solo brani con file locale) ─────────
+                let copyable = menuTargetTracks.filter { $0.locationPath != nil }
+                if !copyable.isEmpty {
+                    let copyItem = NSMenuItem(
+                        title: copyable.count == 1
+                            ? "Copia file in cartella…"
+                            : "Copia \(copyable.count) file in cartella…",
+                        action: #selector(copyFilesAction(_:)),
+                        keyEquivalent: ""
+                    )
+                    copyItem.target = self
+                    menu.addItem(copyItem)
+                }
             }
 
             // ── Ignora in MusiFix (brano + album) ───────────────────────────────
@@ -394,6 +431,17 @@ struct TrackTableView: NSViewRepresentable {
         @objc func addToPlaylistAction(_ sender: NSMenuItem) {
             guard let playlistID = sender.representedObject as? String, !menuTargetPIDs.isEmpty else { return }
             onAddToPlaylist(menuTargetPIDs, playlistID)
+        }
+
+        @objc func copyFilesAction(_ sender: NSMenuItem) {
+            let copyable = menuTargetTracks.filter { $0.locationPath != nil }.map { $0.persistentID }
+            guard !copyable.isEmpty else { return }
+            onCopyFiles(copyable)
+        }
+
+        @objc func markForVerificationAction(_ sender: NSMenuItem) {
+            guard !menuTargetPIDs.isEmpty else { return }
+            onMarkForVerification(menuTargetPIDs)
         }
 
         @objc func markAsSingleAction(_ sender: NSMenuItem) {

@@ -264,6 +264,26 @@ public struct TrackDAO: Sendable {
         (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM track WHERE hasArtwork IS NOT NULL") ?? 0) > 0
     }
 
+    /// Percorsi POSIX dei file locali dei brani indicati (solo quelli con
+    /// `locationPath` valorizzato — i cloud-only vengono esclusi).
+    public static func fetchLocalPaths(pids: [String], in db: Database) throws -> [String] {
+        guard !pids.isEmpty else { return [] }
+        var paths: [String] = []
+        let chunkSize = 900
+        var i = 0
+        while i < pids.count {
+            let chunk = Array(pids[i..<min(i + chunkSize, pids.count)])
+            let ph = chunk.map { _ in "?" }.joined(separator: ",")
+            let rows = try String.fetchAll(db, sql: """
+                SELECT locationPath FROM track
+                WHERE persistentID IN (\(ph)) AND locationPath IS NOT NULL AND locationPath <> ''
+                """, arguments: StatementArguments(chunk))
+            paths.append(contentsOf: rows)
+            i += chunkSize
+        }
+        return paths
+    }
+
     private static func applySorting(
         _ field: TrackSortField,
         ascending: Bool,

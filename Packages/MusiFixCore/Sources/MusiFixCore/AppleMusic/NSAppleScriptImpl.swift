@@ -493,6 +493,102 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
         return Set(raw.components(separatedBy: "\n").filter { !$0.isEmpty })
     }
 
+    /// Membership completa: id/nome/parent/isFolder + persistentID dei brani per
+    /// ogni playlist normale e cartella. Righe tab-delimitate, trackIDs separati
+    /// da virgola. Un `get persistent ID of every track` per playlist.
+    public func playlistMembership() async throws -> [PlaylistMembership] {
+        let script = """
+        tell application "Music"
+            set od to AppleScript's text item delimiters
+            set out to ""
+            repeat with p in user playlists
+                try
+                    set sk to special kind of p
+                    set isF to (sk is folder)
+                    set includeIt to isF or ((smart of p is false) and (sk is none))
+                    if includeIt then
+                        set pid to persistent ID of p
+                        set pname to name of p
+                        set parentID to ""
+                        try
+                            set parentID to persistent ID of parent of p
+                        end try
+                        set tids to ""
+                        if not isF then
+                            set AppleScript's text item delimiters to ","
+                            set tids to ((get persistent ID of every track of p) as string)
+                            set AppleScript's text item delimiters to od
+                        end if
+                        set out to out & pid & tab & pname & tab & (isF as string) & tab & parentID & tab & tids & linefeed
+                    end if
+                end try
+            end repeat
+            set AppleScript's text item delimiters to od
+            return out
+        end tell
+        """
+        let raw = try runAppleScript(script)
+        var result: [PlaylistMembership] = []
+        for line in raw.components(separatedBy: "\n") where !line.isEmpty {
+            let f = line.components(separatedBy: "\t")
+            guard f.count >= 5, !f[0].isEmpty else { continue }
+            let isFolder = (f[2] == "true")
+            let parentID = f[3].isEmpty ? nil : f[3]
+            let tids = isFolder ? [] : f[4].components(separatedBy: ",").filter { !$0.isEmpty }
+            let node = MusicPlaylistNode(id: f[0], name: f[1], isFolder: isFolder, parentID: parentID)
+            result.append(PlaylistMembership(node: node, trackIDs: tids))
+        }
+        return result
+    }
+
+    /// Crea (se assenti) la cartella e la playlist indicata, ritornando il
+    /// persistentID della playlist. Se `folder` è nil crea la playlist al livello radice.
+    public func ensurePlaylist(named name: String, inFolder folder: String?) async throws -> String {
+        let nm = name.appleScriptEscaped()
+        let script: String
+        if let folder, !folder.isEmpty {
+            let fn = folder.appleScriptEscaped()
+            script = """
+            tell application "Music"
+                if not (exists folder playlist "\(fn)") then
+                    make new folder playlist with properties {name:"\(fn)"}
+                end if
+                set theFolder to folder playlist "\(fn)"
+                set foundID to ""
+                repeat with p in (every user playlist)
+                    try
+                        if (name of p is "\(nm)") and (exists parent of p) then
+                            if (persistent ID of parent of p is (persistent ID of theFolder)) then
+                                set foundID to persistent ID of p
+                                exit repeat
+                            end if
+                        end if
+                    end try
+                end repeat
+                if foundID is "" then
+                    set newPl to make new playlist at theFolder with properties {name:"\(nm)"}
+                    set foundID to persistent ID of newPl
+                end if
+                return foundID
+            end tell
+            """
+        } else {
+            script = """
+            tell application "Music"
+                if not (exists user playlist "\(nm)") then
+                    make new playlist with properties {name:"\(nm)"}
+                end if
+                return persistent ID of user playlist "\(nm)"
+            end tell
+            """
+        }
+        let id = try runAppleScript(script)
+        guard !id.isEmpty else {
+            throw MusiFixError.appleScriptError("Playlist \u{201C}\(name)\u{201D} non creata")
+        }
+        return id
+    }
+
     // ─── NSAppleScript runner ────────────────────────────────────────────────
 
     @discardableResult

@@ -21,6 +21,7 @@ final class AppState: ObservableObject {
     let orphanService: OrphanScanService
     let ignoreService: IgnoreService
     let playlistService: PlaylistService
+    let fileCopyService = FileCopyService()
 
     @Published var indexProgress: IndexProgress = .init(
         phase: .idle, processed: 0, total: 0, lastSyncDate: nil

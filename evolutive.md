@@ -182,8 +182,8 @@ pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
 | Fase | Funzionalità | Complessità | Rete | Dipende da | Stato |
 |---|---|---|---|---|---|
 | **16** | Ricerca web nell'editor (Google + Wikipedia, finestra interna) | Bassa | Sì (WebView) | 14 | ✅ |
-| **17** | Copia file del brano (se scaricato) in cartella a scelta | Bassa | No | — | ⬜ |
-| **18** | Playlist "Da verificare" → WORK/ToCheck (crea se assente) | Media | No | — | ⬜ |
+| **17** | Copia file del brano (se scaricato) in cartella a scelta | Bassa | No | — | ✅ |
+| **18** | Playlist "Da verificare" → WORK/ToCheck (crea se assente) | Media | No | — | ✅ |
 | **19** | Playlist per brano + Vista Playlist + copia file cartella | Alta | No | 17, 18 | ⬜ |
 | **20** | Sincronizzazione automatica in background | Media | No | — | ⬜ |
 
@@ -192,12 +192,12 @@ pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
 - `TrackEditorPanel`: due pulsanti nella barra strumenti ("Cerca su Google", "Wikipedia") che aprono la finestra interna sul brano corrente.
 - **File:** `ContentView.swift` (WebSearchSheet parametrico), `TrackEditorPanel.swift`.
 
-### Fase 17 — Copia file brano in cartella ⬜
+### Fase 17 — Copia file brano in cartella ✅
 - `FileCopyService` (core, actor): dato un insieme di pid, copia i file locali esistenti in una cartella destinazione; salta i brani cloud-only / senza file; ritorna esito (copiati/saltati/falliti + conflitti nome risolti con suffisso).
 - UI: menu contestuale "Copia file in cartella…" (selezione) + pulsante nell'editor; `NSOpenPanel` per la cartella; alert riepilogo.
 - **File:** `Packages/.../FileTransfer/FileCopyService.swift` (nuovo), `ContentView.swift`, `Browser/TrackTableView.swift`, `TrackEditorPanel.swift`, `AppState.swift`.
 
-### Fase 18 — Playlist "Da verificare" (WORK/ToCheck) ⬜
+### Fase 18 — Playlist "Da verificare" (WORK/ToCheck) ✅
 - Bridge ObjC: `ensurePlaylistNamed:inFolderNamed:` → crea (se assenti) cartella `WORK` e playlist `ToCheck` al suo interno, ritorna il persistentID della playlist. Riusa `userPlaylists`, crea via `make new`.
 - `PlaylistService.ensureToCheckPlaylist()` + `markForVerification(pids:)` (ensure + addTracks con de-dup).
 - UI: menu contestuale "Segna come da verificare (WORK/ToCheck)" + pulsante editor; feedback via alert playlist esistente.

@@ -33,6 +33,7 @@ struct ContentView: View {
     @State private var showSetPosition1of1Confirm = false
     @State private var webSearchTarget: WebSearchTarget?
     @State private var playlistFeedback: String?
+    @State private var actionFeedback: String?
     @State private var playlistScanDone = true
     @State private var artworkScanDone = true
 
@@ -420,7 +421,9 @@ struct ContentView: View {
                                 albumArtist: track.albumArtist, artist: track.artist, album: track.album)
                             viewMode = .albums
                         },
-                        onAddToPlaylist: { pids, playlistID in addToPlaylist(pids: pids, playlistID: playlistID) }
+                        onAddToPlaylist: { pids, playlistID in addToPlaylist(pids: pids, playlistID: playlistID) },
+                        onCopyFiles: { pids in copyFiles(pids: pids) },
+                        onMarkForVerification: { pids in markForVerification(pids: pids) }
                     )
                     .frame(minWidth: 500)
                     .overlay { scanHintOverlay }
@@ -555,6 +558,13 @@ struct ContentView: View {
         } message: {
             Text(playlistFeedback ?? "")
         }
+        .alert("MusiFix", isPresented: Binding(
+            get: { actionFeedback != nil }, set: { if !$0 { actionFeedback = nil } }
+        )) {
+            Button("OK", role: .cancel) { actionFeedback = nil }
+        } message: {
+            Text(actionFeedback ?? "")
+        }
         .confirmationDialog(
             markSinglePIDs.count == 1
                 ? "Aggiungere \u{201C}- Single\u{201D} all'album del brano selezionato?"
@@ -655,6 +665,70 @@ struct ContentView: View {
                 await MainActor.run { playlistFeedback = msg }
             } catch {
                 await MainActor.run { playlistFeedback = "Errore: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    /// Copia i file locali dei brani indicati in una cartella scelta dall'utente.
+    private func copyFiles(pids: [String], defaultFolderName: String? = nil) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Copia qui"
+        panel.message = "Scegli la cartella di destinazione dei file"
+        guard panel.runModal() == .OK, var dest = panel.url else { return }
+        // Per la vista playlist si propone una sottocartella col nome della playlist.
+        if let name = defaultFolderName, !name.isEmpty {
+            dest = dest.appendingPathComponent(sanitizeFolderName(name), isDirectory: true)
+        }
+        let paths = (try? appState.db.read { db in
+            try TrackDAO.fetchLocalPaths(pids: pids, in: db)
+        }) ?? []
+        guard !paths.isEmpty else {
+            actionFeedback = "Nessun file locale da copiare (brani solo-cloud)."
+            return
+        }
+        let finalDest = dest
+        Task {
+            do {
+                let r = try await appState.fileCopyService.copyFiles(sourcePaths: paths, to: finalDest)
+                var parts = ["\(r.copied) copiati"]
+                if r.missing > 0 { parts.append("\(r.missing) senza file") }
+                if r.failed > 0 { parts.append("\(r.failed) falliti") }
+                await MainActor.run {
+                    actionFeedback = parts.joined(separator: ", ") + " in \u{201C}\(finalDest.lastPathComponent)\u{201D}."
+                }
+            } catch {
+                await MainActor.run { actionFeedback = "Errore copia: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    /// Rende un nome playlist sicuro come nome cartella (rimuove separatori).
+    private func sanitizeFolderName(_ name: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/:\\")
+        let cleaned = name.components(separatedBy: invalid).joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "Playlist" : cleaned
+    }
+
+    /// Segna i brani come "da verificare": li aggiunge alla playlist WORK/ToCheck.
+    private func markForVerification(pids: [String]) {
+        Task {
+            do {
+                let r = try await appState.playlistService.markForVerification(pids)
+                var parts: [String] = []
+                if r.added > 0   { parts.append("\(r.added) aggiunti") }
+                if r.skipped > 0 { parts.append("\(r.skipped) già presenti") }
+                if r.failed > 0  { parts.append("\(r.failed) non riusciti") }
+                let msg = parts.isEmpty ? "Nessuna modifica." : parts.joined(separator: ", ") + "."
+                await MainActor.run {
+                    actionFeedback = "Playlist \u{201C}WORK/ToCheck\u{201D}: " + msg
+                    reloadPlaylists()
+                }
+            } catch {
+                await MainActor.run { actionFeedback = "Errore: \(error.localizedDescription)" }
             }
         }
     }

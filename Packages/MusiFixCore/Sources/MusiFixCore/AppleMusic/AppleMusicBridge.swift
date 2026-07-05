@@ -35,6 +35,14 @@ public protocol AppleMusicBridge: Sendable {
 
     /// Aggiunge i brani (per persistentID) alla playlist indicata, saltando i duplicati.
     func addTracks(_ pids: [String], toPlaylistID playlistID: String) async throws -> PlaylistAddResult
+
+    /// Garantisce l'esistenza di una playlist (dato nome), eventualmente dentro una
+    /// cartella (creata se assente). Ritorna il persistentID della playlist.
+    func ensurePlaylist(named name: String, inFolder folder: String?) async throws -> String
+
+    /// Appartenenza completa: per ogni playlist normale/cartella dell'utente
+    /// restituisce nodo + elenco dei persistentID contenuti (vuoto per le cartelle).
+    func playlistMembership() async throws -> [PlaylistMembership]
 }
 
 // ── Modelli playlist ───────────────────────────────────────────────────────────
@@ -48,6 +56,17 @@ public struct MusicPlaylistNode: Sendable, Identifiable, Hashable {
 
     public init(id: String, name: String, isFolder: Bool, parentID: String?) {
         self.id = id; self.name = name; self.isFolder = isFolder; self.parentID = parentID
+    }
+}
+
+/// Nodo playlist con l'elenco completo dei brani contenuti (per la Vista Playlist
+/// e le playlist-per-brano). Le cartelle hanno `trackIDs` vuoto.
+public struct PlaylistMembership: Sendable {
+    public let node: MusicPlaylistNode
+    public let trackIDs: [String]
+
+    public init(node: MusicPlaylistNode, trackIDs: [String]) {
+        self.node = node; self.trackIDs = trackIDs
     }
 }
 
@@ -69,6 +88,12 @@ public extension AppleMusicBridge {
     }
     func addTracks(_ pids: [String], toPlaylistID playlistID: String) async throws -> PlaylistAddResult {
         throw MusiFixError.appleScriptError("Aggiunta a playlist non supportata da questo bridge")
+    }
+    func ensurePlaylist(named name: String, inFolder folder: String?) async throws -> String {
+        throw MusiFixError.appleScriptError("Creazione playlist non supportata da questo bridge")
+    }
+    func playlistMembership() async throws -> [PlaylistMembership] {
+        throw MusiFixError.appleScriptError("Membership playlist non supportata da questo bridge")
     }
 }
 
