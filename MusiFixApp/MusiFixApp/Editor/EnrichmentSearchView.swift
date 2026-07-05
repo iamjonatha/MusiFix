@@ -292,6 +292,12 @@ struct EnrichmentSearchView: View {
                     appliedOK = true
                     onApplied()
                 }
+                // Mostra brevemente l'esito, poi chiude la sheet: l'editor si
+                // aggiorna da solo tramite onApplied (rilettura con retry).
+                if !autoMode {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    await MainActor.run { isPresented = false }
+                }
             } catch {
                 await MainActor.run {
                     isApplying = false

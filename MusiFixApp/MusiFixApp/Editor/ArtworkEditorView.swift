@@ -76,7 +76,7 @@ struct ArtworkEditorView: View {
             EnrichmentSearchView(
                 track: track,
                 appState: appState,
-                onApplied: { loadArtwork() },
+                onApplied: { reloadAfterApply() },
                 isPresented: $showEnrichment
             )
         }
@@ -90,6 +90,19 @@ struct ArtworkEditorView: View {
             let data = try? await bridge.artwork(persistentID: p)
             guard !Task.isCancelled else { return }
             await MainActor.run { isLoading = false; if let d = data { image = NSImage(data: d) } }
+        }
+    }
+
+    /// Rilettura dopo un'applicazione da "Cerca online": la persistenza cloud non è
+    /// immediata, quindi si ritenta qualche volta prima di mostrare la copertina.
+    private func reloadAfterApply() {
+        loadTask?.cancel()
+        isLoading = true; error = nil
+        let bridge = appState.bridge; let p = pid
+        loadTask = Task {
+            let img = await Self.rereadArtwork(bridge: bridge, pid: p, retries: 4)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { isLoading = false; if let img { image = img } }
         }
     }
 
