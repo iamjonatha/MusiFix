@@ -28,8 +28,8 @@ struct TrackTableView: NSViewRepresentable {
     var onSetIgnore: ([String], Bool) -> Void = { _, _ in }
     /// (brano di riferimento per la chiave album, ignora) — ignora/riabilita l'album.
     var onSetAlbumIgnore: (DBTrack, Bool) -> Void = { _, _ in }
-    /// Apre la ricerca Google embedded per il brano indicato.
-    var onWebSearch: (DBTrack) -> Void = { _ in }
+    /// Apre la ricerca web embedded (Google/Wikipedia) per il brano indicato.
+    var onWebSearch: (DBTrack, WebSearchEngine) -> Void = { _, _ in }
     /// Passa alla vista album posizionandosi sull'album del brano indicato.
     var onOpenAlbumView: (DBTrack) -> Void = { _ in }
     /// (pids, playlistID) — aggiunge i brani selezionati alla playlist indicata.
@@ -163,7 +163,7 @@ struct TrackTableView: NSViewRepresentable {
         var onSetPosition1of1: ([String]) -> Void = { _ in }
         var onSetIgnore: ([String], Bool) -> Void = { _, _ in }
         var onSetAlbumIgnore: (DBTrack, Bool) -> Void = { _, _ in }
-        var onWebSearch: (DBTrack) -> Void = { _ in }
+        var onWebSearch: (DBTrack, WebSearchEngine) -> Void = { _, _ in }
         var onOpenAlbumView: (DBTrack) -> Void = { _ in }
         var onAddToPlaylist: ([String], String) -> Void = { _, _ in }
         private var menuTargetPIDs: [String] = []
@@ -215,11 +215,19 @@ struct TrackTableView: NSViewRepresentable {
 
             let googleItem = NSMenuItem(
                 title: "Cerca su Google",
-                action: #selector(webSearchAction(_:)),
+                action: #selector(webSearchGoogleAction(_:)),
                 keyEquivalent: ""
             )
             googleItem.target = self
             menu.addItem(googleItem)
+
+            let wikiItem = NSMenuItem(
+                title: "Cerca su Wikipedia",
+                action: #selector(webSearchWikiAction(_:)),
+                keyEquivalent: ""
+            )
+            wikiItem.target = self
+            menu.addItem(wikiItem)
 
             // Passa alla vista album (per editing massivo per album).
             if !clickedTrack.album.isEmpty {
@@ -310,9 +318,14 @@ struct TrackTableView: NSViewRepresentable {
             onSetAlbumIgnore(t, menuAlbumIgnoreToOn)
         }
 
-        @objc func webSearchAction(_ sender: NSMenuItem) {
+        @objc func webSearchGoogleAction(_ sender: NSMenuItem) {
             guard let t = menuTargetTrack else { return }
-            onWebSearch(t)
+            onWebSearch(t, .google)
+        }
+
+        @objc func webSearchWikiAction(_ sender: NSMenuItem) {
+            guard let t = menuTargetTrack else { return }
+            onWebSearch(t, .wikipedia)
         }
 
         @objc func openAlbumViewAction(_ sender: NSMenuItem) {

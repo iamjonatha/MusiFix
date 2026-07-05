@@ -414,7 +414,7 @@ struct ContentView: View {
                         },
                         onSetIgnore: { pids, ignore in setIgnore(pids: pids, ignore: ignore) },
                         onSetAlbumIgnore: { track, ignore in setAlbumIgnore(track: track, ignore: ignore) },
-                        onWebSearch: { track in webSearchTarget = WebSearchTarget(track: track) },
+                        onWebSearch: { track, engine in webSearchTarget = WebSearchTarget(track: track, engine: engine) },
                         onOpenAlbumView: { track in
                             albumFocusKey = IgnoreService.albumKey(
                                 albumArtist: track.albumArtist, artist: track.artist, album: track.album)
@@ -546,7 +546,7 @@ struct ContentView: View {
             )
         }
         .sheet(item: $webSearchTarget) { target in
-            WebSearchSheet(track: target.track) { webSearchTarget = nil }
+            WebSearchSheet(track: target.track, engine: target.engine) { webSearchTarget = nil }
         }
         .alert("Aggiunta a playlist", isPresented: Binding(
             get: { playlistFeedback != nil }, set: { if !$0 { playlistFeedback = nil } }
@@ -952,33 +952,67 @@ struct SyncStatusView: View {
 // ── Ricerca Google embedded (Fase 14) ─────────────────────────────────────────
 
 /// Wrapper Identifiable per presentare la ricerca web via `.sheet(item:)`.
+/// Motore di ricerca web disponibile nelle finestre interne.
+enum WebSearchEngine: Hashable {
+    case google
+    case wikipedia
+
+    var title: String {
+        switch self {
+        case .google:    return "Ricerca Google"
+        case .wikipedia: return "Ricerca Wikipedia"
+        }
+    }
+
+    /// Query costruita dai metadati del brano.
+    func query(for track: DBTrack) -> String {
+        switch self {
+        case .google:
+            var parts = [track.name, track.artist]
+            if track.year > 0 { parts.append(String(track.year)) }
+            return parts.filter { !$0.isEmpty }.joined(separator: " ")
+        case .wikipedia:
+            // Su Wikipedia l'anno è rumore; artista + titolo trova l'articolo giusto.
+            return [track.name, track.artist].filter { !$0.isEmpty }.joined(separator: " ")
+        }
+    }
+
+    func url(for track: DBTrack) -> URL {
+        let q = query(for: track)
+        switch self {
+        case .google:
+            var c = URLComponents(string: "https://www.google.com/search")!
+            c.queryItems = [URLQueryItem(name: "q", value: q)]
+            return c.url ?? URL(string: "https://www.google.com")!
+        case .wikipedia:
+            // Pagina di ricerca standard: nessuna API né limiti di rate.
+            var c = URLComponents(string: "https://it.wikipedia.org/w/index.php")!
+            c.queryItems = [URLQueryItem(name: "search", value: q)]
+            return c.url ?? URL(string: "https://it.wikipedia.org")!
+        }
+    }
+}
+
 struct WebSearchTarget: Identifiable {
     let id = UUID()
     let track: DBTrack
+    var engine: WebSearchEngine = .google
 }
 
-/// Finestra interna con ricerca Google per titolo · artista · anno del brano.
+/// Finestra interna con ricerca web (Google o Wikipedia) sui metadati del brano.
 struct WebSearchSheet: View {
     let track: DBTrack
+    var engine: WebSearchEngine = .google
     var onClose: () -> Void
 
-    private var query: String {
-        var parts = [track.name, track.artist]
-        if track.year > 0 { parts.append(String(track.year)) }
-        return parts.filter { !$0.isEmpty }.joined(separator: " ")
-    }
-
-    private var url: URL {
-        var c = URLComponents(string: "https://www.google.com/search")!
-        c.queryItems = [URLQueryItem(name: "q", value: query)]
-        return c.url ?? URL(string: "https://www.google.com")!
-    }
+    private var query: String { engine.query(for: track) }
+    private var url: URL { engine.url(for: track) }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                Text("Ricerca Google").font(.headline)
+                Text(engine.title).font(.headline)
                 Text(query).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
                 Button(action: onClose) {

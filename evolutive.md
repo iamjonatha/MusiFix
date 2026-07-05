@@ -181,13 +181,13 @@ pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
 
 | Fase | Funzionalità | Complessità | Rete | Dipende da | Stato |
 |---|---|---|---|---|---|
-| **16** | Ricerca web nell'editor (Google + Wikipedia, finestra interna) | Bassa | Sì (WebView) | 14 | ⬜ |
+| **16** | Ricerca web nell'editor (Google + Wikipedia, finestra interna) | Bassa | Sì (WebView) | 14 | ✅ |
 | **17** | Copia file del brano (se scaricato) in cartella a scelta | Bassa | No | — | ⬜ |
 | **18** | Playlist "Da verificare" → WORK/ToCheck (crea se assente) | Media | No | — | ⬜ |
 | **19** | Playlist per brano + Vista Playlist + copia file cartella | Alta | No | 17, 18 | ⬜ |
 | **20** | Sincronizzazione automatica in background | Media | No | — | ⬜ |
 
-### Fase 16 — Ricerca web nell'editor ⬜
+### Fase 16 — Ricerca web nell'editor ✅
 - Generalizzare `WebSearchSheet` con un enum `WebSearchEngine` (Google, Wikipedia): query e URL derivati dal brano. Wikipedia via `it.wikipedia.org/w/index.php?search=…` (nessuna API/limite: è la pagina di ricerca standard). Google resta come Fase 14.
 - `TrackEditorPanel`: due pulsanti nella barra strumenti ("Cerca su Google", "Wikipedia") che aprono la finestra interna sul brano corrente.
 - **File:** `ContentView.swift` (WebSearchSheet parametrico), `TrackEditorPanel.swift`.

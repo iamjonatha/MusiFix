@@ -26,6 +26,7 @@ struct TrackEditorPanel: View {
     @State private var lastSuccess = false
     @State private var showDeletion = false
     @State private var showYearResolution = false
+    @State private var webSearch: WebSearchTarget? = nil
 
     var hasChanges: Bool {
         name != track.name || artist != track.artist ||
@@ -141,6 +142,24 @@ struct TrackEditorPanel: View {
                 .font(.caption)
                 .help("Mostra in Music")
 
+                Button {
+                    webSearch = WebSearchTarget(track: track, engine: .google)
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .help("Cerca su Google (finestra interna)")
+
+                Button {
+                    webSearch = WebSearchTarget(track: track, engine: .wikipedia)
+                } label: {
+                    Image(systemName: "book")
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .help("Cerca su Wikipedia (finestra interna)")
+
                 Spacer()
 
                 Button(role: .destructive) { showDeletion = true } label: {
@@ -189,6 +208,9 @@ struct TrackEditorPanel: View {
                 onApplied: { onWritten() },
                 isPresented: $showYearResolution
             )
+        }
+        .sheet(item: $webSearch) { target in
+            WebSearchSheet(track: target.track, engine: target.engine) { webSearch = nil }
         }
     }
 
