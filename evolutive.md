@@ -185,7 +185,7 @@ pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
 | **17** | Copia file del brano (se scaricato) in cartella a scelta | Bassa | No | — | ✅ |
 | **18** | Playlist "Da verificare" → WORK/ToCheck (crea se assente) | Media | No | — | ✅ |
 | **19** | Playlist per brano + Vista Playlist + copia file cartella | Alta | No | 17, 18 | ✅ |
-| **20** | Sincronizzazione automatica in background | Media | No | — | ⬜ |
+| **20** | Sincronizzazione automatica in background | Media | No | — | ✅ |
 
 ### Fase 16 — Ricerca web nell'editor ✅
 - Generalizzare `WebSearchSheet` con un enum `WebSearchEngine` (Google, Wikipedia): query e URL derivati dal brano. Wikipedia via `it.wikipedia.org/w/index.php?search=…` (nessuna API/limite: è la pagina di ricerca standard). Google resta come Fase 14.
@@ -214,7 +214,7 @@ pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
 - UI: `TrackEditorPanel` mostra le playlist (non-smart) del brano come chip; nuova **Vista Playlist** (terzo modo o sheet) con elenco playlist → brani e azione "Copia file in cartella…" (nome cartella proposto = nome playlist, riusa Fase 17).
 - **File:** bridge, migrazioni, `IndexService.swift`, nuovo `PlaylistDAO.swift`, `PlaylistsView.swift`, `ContentView.swift`, `TrackEditorPanel.swift`.
 
-### Fase 20 — Sincronizzazione automatica ⬜
+### Fase 20 — Sincronizzazione automatica ✅
 - Impostazioni (`AppStorage`): `autoSyncEnabled`, `autoSyncMinutes`. `AppState` schedula un `Task` periodico che, se non è già in corso un'indicizzazione, esegue sync incrementale + riscansione playlist e copertine, poi ricarica le set di evidenziazione.
 - UI: popover impostazioni (toggle + intervallo) in toolbar.
 - **File:** `AppState.swift`, `ContentView.swift`.

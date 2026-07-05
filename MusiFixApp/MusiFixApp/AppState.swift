@@ -29,6 +29,12 @@ final class AppState: ObservableObject {
     @Published var isIndexing: Bool = false
 
     private var indexTask: Task<Void, Never>?
+    private var autoSyncTask: Task<Void, Never>?
+
+    /// Chiavi UserDefaults per la sincronizzazione automatica (Fase 20).
+    static let autoSyncEnabledKey = "autoSyncEnabled"
+    static let autoSyncMinutesKey = "autoSyncMinutes"
+    static let autoSyncDefaultMinutes = 30
 
     init() {
         let appSupport = FileManager.default
@@ -55,6 +61,8 @@ final class AppState: ObservableObject {
         self.orphanService = OrphanScanService(db: db)
         self.ignoreService = IgnoreService(db: db)
         self.playlistService = PlaylistService(bridge: bridge)
+
+        configureAutoSync()
     }
 
     func startFullIndex() {
@@ -168,5 +176,48 @@ final class AppState: ObservableObject {
     /// non istantaneamente.
     func cancelIndexing() {
         indexTask?.cancel()
+    }
+
+    // ── Sincronizzazione automatica in background (Fase 20) ────────────────────
+
+    /// (Ri)avvia lo scheduler di sync automatica in base alle preferenze utente.
+    /// Da richiamare all'avvio e ogni volta che le impostazioni cambiano.
+    func configureAutoSync() {
+        autoSyncTask?.cancel()
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: Self.autoSyncEnabledKey) else { return }
+        let stored = defaults.integer(forKey: Self.autoSyncMinutesKey)
+        let minutes = stored > 0 ? stored : Self.autoSyncDefaultMinutes
+        autoSyncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(minutes) * 60 * 1_000_000_000)
+                if Task.isCancelled { break }
+                await self?.runAutoSyncCycleIfIdle()
+            }
+        }
+    }
+
+    /// Esegue un ciclo di sync automatica se non c'è già un'indicizzazione in corso:
+    /// sync incrementale + riscansione playlist + riscansione copertine.
+    private func runAutoSyncCycleIfIdle() async {
+        guard !isIndexing else { return }
+        isIndexing = true
+        let progressTask = Task {
+            for await progress in await indexService.progressStream() {
+                self.indexProgress = progress
+            }
+        }
+        do {
+            try await indexService.runIncrementalSync()
+            try await indexService.scanPlaylistFull()
+            try await indexService.scanArtworkPresence()
+            print("Auto-sync completato")
+        } catch is CancellationError {
+            print("Auto-sync annullato")
+        } catch {
+            print("Auto-sync error: \(error)")
+        }
+        progressTask.cancel()
+        isIndexing = false
     }
 }

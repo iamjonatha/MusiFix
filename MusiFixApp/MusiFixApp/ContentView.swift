@@ -36,6 +36,7 @@ struct ContentView: View {
     @State private var actionFeedback: String?
     @State private var playlistScanDone = true
     @State private var artworkScanDone = true
+    @State private var showAutoSyncSettings = false
 
     var selectedTrack: DBTrack? {
         guard browser.selectedPIDs.count == 1 else { return nil }
@@ -139,7 +140,15 @@ struct ContentView: View {
                     .help("Legge da Music lo stato iCloud (Abbinato/Caricato/Acquistato/Apple Music) e popola i relativi filtri. Veloce; rieseguila se lo stato dei brani cambia.")
                 Button("Scansiona playlist") { appState.startPlaylistScan() }
                     .disabled(appState.isIndexing)
-                    .help("Legge da Music le playlist normali (escluse le smart) e marca i brani che non appartengono a nessuna. Esegui prima di usare il filtro/evidenziazione \u{201C}Non in playlist\u{201D}.")
+                    .help("Legge da Music le playlist normali (escluse le smart), popola la Vista Playlist e marca i brani che non appartengono a nessuna.")
+
+                Button { showAutoSyncSettings.toggle() } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath.circle")
+                }
+                .help("Sincronizzazione automatica in background")
+                .popover(isPresented: $showAutoSyncSettings, arrowEdge: .bottom) {
+                    AutoSyncSettingsPopover { appState.configureAutoSync() }
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -1036,6 +1045,35 @@ struct SyncStatusView: View {
 // ── Ricerca Google embedded (Fase 14) ─────────────────────────────────────────
 
 /// Wrapper Identifiable per presentare la ricerca web via `.sheet(item:)`.
+/// Impostazioni della sincronizzazione automatica in background (Fase 20).
+struct AutoSyncSettingsPopover: View {
+    var onChange: () -> Void
+    @AppStorage(AppState.autoSyncEnabledKey) private var enabled = false
+    @AppStorage(AppState.autoSyncMinutesKey) private var minutes = AppState.autoSyncDefaultMinutes
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Sincronizzazione automatica").font(.headline)
+            Toggle("Attiva sync in background", isOn: $enabled)
+                .onChange(of: enabled) { _, _ in onChange() }
+            HStack(spacing: 6) {
+                Text("Ogni")
+                Stepper(value: $minutes, in: 5...720, step: 5) {
+                    Text("\(minutes) min").monospacedDigit()
+                }
+                .onChange(of: minutes) { _, _ in onChange() }
+                .disabled(!enabled)
+            }
+            Text("Esegue periodicamente: sync incrementale dell'indice, riscansione playlist e copertine. Viene saltata se è già in corso un'indicizzazione manuale.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(width: 320)
+    }
+}
+
 /// Motore di ricerca web disponibile nelle finestre interne.
 enum WebSearchEngine: Hashable {
     case google
