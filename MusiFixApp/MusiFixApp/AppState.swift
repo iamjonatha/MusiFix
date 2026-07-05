@@ -208,8 +208,8 @@ final class AppState: ObservableObject {
             }
         }
         do {
+            // runIncrementalSync include già la scansione playlist.
             try await indexService.runIncrementalSync()
-            try await indexService.scanPlaylistFull()
             try await indexService.scanArtworkPresence()
             print("Auto-sync completato")
         } catch is CancellationError {

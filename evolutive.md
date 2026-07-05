@@ -206,6 +206,10 @@ pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
 ### Fase 19 — Playlist per brano + Vista Playlist ✅
 > Nota: "Scansiona playlist" ora esegue la scansione *dettagliata* (`scanPlaylistFull`),
 > che popola anche `playlist`/`playlist_track` oltre al flag `inPlaylist`.
+> La scansione è veloce (1 Apple Event per playlist) ed è **inclusa automaticamente
+> in "Indicizza tutto" e in ogni "Sync"** (`runFullIndex`/`runIncrementalSync`); il
+> pulsante dedicato resta per un aggiornamento manuale. La scansione copertine, lenta,
+> resta separata (manuale o via sync automatica).
 
 - Bridge: `playlistMembership` → per ogni playlist normale/cartella: id, nome, parentID, isFolder, `trackIDs`. Un solo passaggio (bulk `arrayByApplyingSelector`).
 - Migrazione **v11**: tabelle `playlist(id, name, parentID, isFolder, scannedAt)` e `playlist_track(playlistID, pid)` + indici; struct DB relative.

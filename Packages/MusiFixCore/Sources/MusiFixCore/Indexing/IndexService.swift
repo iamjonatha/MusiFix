@@ -179,6 +179,12 @@ public actor IndexService {
 
         let syncDate = Date()
         log.info("Indicizzazione completa: \(processed) brani")
+
+        // Appartenenza playlist: veloce (1 Apple Event per playlist), la eseguiamo
+        // insieme all'indicizzazione. Un errore qui non compromette l'indice.
+        do { _ = try await scanPlaylistFull() }
+        catch { log.error("Scansione playlist post-indicizzazione fallita: \(error.localizedDescription)") }
+
         setProgress(.init(phase: .done, processed: processed, total: total, lastSyncDate: syncDate))
     }
 
@@ -271,6 +277,11 @@ public actor IndexService {
 
         let syncDate = Date()
         log.info("Sync incrementale: +\(added) ~\(updated) -\(removed)")
+
+        // Appartenenza playlist inclusa nella sync (veloce, per-playlist).
+        do { _ = try await scanPlaylistFull() }
+        catch { log.error("Scansione playlist post-sync fallita: \(error.localizedDescription)") }
+
         setProgress(.init(
             phase: .done,
             processed: added + updated + removed,
