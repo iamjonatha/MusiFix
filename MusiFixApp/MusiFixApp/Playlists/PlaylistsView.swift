@@ -1,9 +1,14 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import MusiFixCore
 import Persistence
 
 /// Vista Playlist (Fase 19): elenco delle playlist (con cartelle) a sinistra e
-/// i brani contenuti a destra, con azione "Copia file in cartella…".
+/// i brani contenuti a destra. Supporta selezione multipla per:
+///  - esportare i brani delle playlist selezionate in un file Markdown;
+///  - generare a video un report dei brani troppo corti / troppo lunghi.
+/// Selezionare una cartella equivale a selezionare tutte le sue playlist figlie.
 struct PlaylistsView: View {
     let appState: AppState
     /// (pids, nome playlist proposto come cartella) — copia i file dei brani.
@@ -11,12 +16,29 @@ struct PlaylistsView: View {
     var onScanRequested: () -> Void
 
     @State private var playlists: [DBPlaylist] = []
-    @State private var selectedID: String? = nil
+    @State private var selection: Set<String> = []
     @State private var tracks: [DBTrack] = []
     @State private var scanDone = true
+    @State private var showDurationReport = false
 
-    private var selectedPlaylist: DBPlaylist? {
-        playlists.first { $0.id == selectedID }
+    /// Playlist effettivamente coinvolte dalla selezione: le cartelle selezionate
+    /// vengono espanse nelle loro figlie; risultato de-duplicato e ordinato.
+    private var effectivePlaylists: [DBPlaylist] {
+        var seen = Set<String>()
+        var result: [DBPlaylist] = []
+        for id in selection {
+            guard let pl = playlists.first(where: { $0.id == id }) else { continue }
+            let targets = pl.isFolder ? children(of: pl.id) : [pl]
+            for t in targets where !seen.contains(t.id) {
+                seen.insert(t.id)
+                result.append(t)
+            }
+        }
+        return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var singlePlaylist: DBPlaylist? {
+        effectivePlaylists.count == 1 ? effectivePlaylists.first : nil
     }
 
     var body: some View {
@@ -33,6 +55,9 @@ struct PlaylistsView: View {
             }
         }
         .onAppear { reload() }
+        .sheet(isPresented: $showDurationReport) {
+            DurationReportView(groups: groupedTracks())
+        }
     }
 
     // ── Sidebar ────────────────────────────────────────────────────────────────
@@ -48,7 +73,7 @@ struct PlaylistsView: View {
     }
 
     private var sidebar: some View {
-        List(selection: $selectedID) {
+        List(selection: $selection) {
             let top = children(of: nil)
             if !top.isEmpty {
                 Section("Playlist") {
@@ -58,13 +83,14 @@ struct PlaylistsView: View {
             ForEach(folders) { folder in
                 let kids = children(of: folder.id)
                 if !kids.isEmpty {
-                    Section(folder.name) {
-                        ForEach(kids) { playlistRow($0) }
+                    Section {
+                        folderRow(folder)
+                        ForEach(kids) { playlistRow($0).padding(.leading, 14) }
                     }
                 }
             }
         }
-        .onChange(of: selectedID) { _, _ in loadTracks() }
+        .onChange(of: selection) { _, _ in loadPreview() }
     }
 
     private func playlistRow(_ pl: DBPlaylist) -> some View {
@@ -75,56 +101,114 @@ struct PlaylistsView: View {
         .tag(pl.id)
     }
 
+    private func folderRow(_ folder: DBPlaylist) -> some View {
+        HStack {
+            Image(systemName: "folder").foregroundStyle(.secondary)
+            Text(folder.name).fontWeight(.medium).lineLimit(1)
+        }
+        .tag(folder.id)
+        .help("Seleziona tutte le playlist della cartella")
+    }
+
     // ── Dettaglio ────────────────────────────────────────────────────────────────
 
     private var detail: some View {
         VStack(spacing: 0) {
-            if let pl = selectedPlaylist {
-                HStack {
-                    Text(pl.name).font(.headline).lineLimit(1)
-                    Text("\(tracks.count) brani").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        onCopyFiles(tracks.map(\.persistentID), pl.name)
-                    } label: {
-                        Label("Copia file in cartella…", systemImage: "square.and.arrow.down.on.square")
-                    }
-                    .disabled(tracks.allSatisfy { $0.locationPath == nil })
-                    .help("Copia i file locali dei brani in una sottocartella col nome della playlist")
-                }
-                .padding(10)
-                Divider()
-                // Intestazione colonne
-                HStack(spacing: 8) {
-                    Text("Titolo").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Artista").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Album").frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .font(.caption).foregroundStyle(.secondary)
-                .padding(.horizontal, 10).padding(.vertical, 4)
-                Divider()
-                List(tracks, id: \.persistentID) { t in
-                    HStack(spacing: 8) {
-                        Text(t.name).frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
-                        Text(t.artist).frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundStyle(.secondary).lineLimit(1)
-                        Text(t.album).frame(maxWidth: .infinity, alignment: .leading)
-                            .foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    .font(.system(size: 12))
-                }
-                .listStyle(.inset(alternatesRowBackgrounds: true))
+            if effectivePlaylists.isEmpty {
+                placeholder
             } else {
-                VStack(spacing: 8) {
-                    Spacer()
-                    Image(systemName: "music.note.list")
-                        .font(.system(size: 34)).foregroundStyle(.tertiary)
-                    Text("Seleziona una playlist").foregroundStyle(.secondary)
-                    Spacer()
+                header
+                Divider()
+                if singlePlaylist != nil {
+                    trackPreview
+                } else {
+                    multiSummary
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+
+    private var header: some View {
+        HStack {
+            if let pl = singlePlaylist {
+                Text(pl.name).font(.headline).lineLimit(1)
+                Text("\(tracks.count) brani").font(.caption).foregroundStyle(.secondary)
+            } else {
+                let count = effectivePlaylists.count
+                Text("\(count) playlist selezionate").font(.headline)
+                Text("\(totalTrackCount) brani").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                showDurationReport = true
+            } label: {
+                Label("Report durate…", systemImage: "clock")
+            }
+            .help("Elenca a video i brani più corti o più lunghi delle soglie indicate")
+            Button {
+                exportMarkdown()
+            } label: {
+                Label("Esporta Markdown…", systemImage: "square.and.arrow.up")
+            }
+            .help("Salva un file .md con le playlist selezionate e i brani contenuti")
+            if let pl = singlePlaylist {
+                Button {
+                    onCopyFiles(tracks.map(\.persistentID), pl.name)
+                } label: {
+                    Label("Copia file…", systemImage: "square.and.arrow.down.on.square")
+                }
+                .disabled(tracks.allSatisfy { $0.locationPath == nil })
+                .help("Copia i file locali dei brani in una sottocartella col nome della playlist")
+            }
+        }
+        .padding(10)
+    }
+
+    private var trackPreview: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Titolo").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Artista").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Album").frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            Divider()
+            List(tracks, id: \.persistentID) { t in
+                HStack(spacing: 8) {
+                    Text(t.name).frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                    Text(t.artist).frame(maxWidth: .infinity, alignment: .leading)
+                        .foregroundStyle(.secondary).lineLimit(1)
+                    Text(t.album).frame(maxWidth: .infinity, alignment: .leading)
+                        .foregroundStyle(.secondary).lineLimit(1)
+                }
+                .font(.system(size: 12))
+            }
+            .listStyle(.inset(alternatesRowBackgrounds: true))
+        }
+    }
+
+    private var multiSummary: some View {
+        List(effectivePlaylists) { pl in
+            HStack {
+                Image(systemName: "music.note.list").foregroundStyle(.secondary)
+                Text(pl.name).lineLimit(1)
+                Spacer()
+                Text("\(playlistCount(pl.id)) brani").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .listStyle(.inset(alternatesRowBackgrounds: true))
+    }
+
+    private var placeholder: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            Image(systemName: "music.note.list")
+                .font(.system(size: 34)).foregroundStyle(.tertiary)
+            Text("Seleziona una o più playlist").foregroundStyle(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var emptyState: some View {
@@ -142,19 +226,217 @@ struct PlaylistsView: View {
         .padding(28)
     }
 
+    // ── Conteggi ─────────────────────────────────────────────────────────────────
+
+    private func playlistCount(_ id: String) -> Int {
+        (try? appState.db.read { try PlaylistDAO.trackCount(id: id, in: $0) }) ?? 0
+    }
+
+    private var totalTrackCount: Int {
+        effectivePlaylists.reduce(0) { $0 + playlistCount($1.id) }
+    }
+
     // ── Caricamento ──────────────────────────────────────────────────────────────
 
     func reload() {
         scanDone = (try? appState.db.read { try PlaylistDAO.scanDone(in: $0) }) ?? false
         playlists = (try? appState.db.read { try PlaylistDAO.fetchPlaylists(in: $0) }) ?? []
-        if selectedID == nil || !playlists.contains(where: { $0.id == selectedID }) {
-            selectedID = children(of: nil).first?.id ?? folders.compactMap { children(of: $0.id).first?.id }.first
+        selection = selection.filter { id in playlists.contains { $0.id == id } }
+        if selection.isEmpty, let first = children(of: nil).first?.id
+            ?? folders.compactMap({ children(of: $0.id).first?.id }).first {
+            selection = [first]
         }
-        loadTracks()
+        loadPreview()
     }
 
-    private func loadTracks() {
-        guard let id = selectedID else { tracks = []; return }
-        tracks = (try? appState.db.read { try PlaylistDAO.tracksInPlaylist(id: id, in: $0) }) ?? []
+    /// Carica l'anteprima brani solo quando è selezionata una singola playlist.
+    private func loadPreview() {
+        guard let pl = singlePlaylist else { tracks = []; return }
+        tracks = (try? appState.db.read { try PlaylistDAO.tracksInPlaylist(id: pl.id, in: $0) }) ?? []
+    }
+
+    /// Brani di ciascuna playlist effettiva, per export e report.
+    private func groupedTracks() -> [PlaylistGroup] {
+        effectivePlaylists.map { pl in
+            let ts = (try? appState.db.read { try PlaylistDAO.tracksInPlaylist(id: pl.id, in: $0) }) ?? []
+            return PlaylistGroup(name: pl.name, tracks: ts)
+        }
+    }
+
+    // ── Export Markdown ──────────────────────────────────────────────────────────
+
+    private func exportMarkdown() {
+        let groups = groupedTracks()
+        guard !groups.isEmpty else { return }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = groups.count == 1 ? "\(safeFileName(groups[0].name)).md" : "playlist.md"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let md = Self.buildMarkdown(groups)
+        do {
+            try md.data(using: .utf8)?.write(to: url)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Impossibile salvare il file"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+    }
+
+    private func safeFileName(_ name: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/:\\?%*|\"<>")
+        return name.components(separatedBy: invalid).joined(separator: "-")
+    }
+
+    /// Un titolo `##` per playlist, poi un elenco puntato `Titolo — Artista — Anno — Genere`
+    /// omettendo i campi mancanti (anno 0, artista/genere vuoti).
+    static func buildMarkdown(_ groups: [PlaylistGroup]) -> String {
+        var out = ""
+        for group in groups {
+            out += "## \(group.name)\n\n"
+            for t in group.tracks {
+                var parts: [String] = [t.name.isEmpty ? "(senza titolo)" : t.name]
+                if !t.artist.isEmpty { parts.append(t.artist) }
+                if t.year > 0 { parts.append(String(t.year)) }
+                if !t.genre.isEmpty { parts.append(t.genre) }
+                out += "- " + parts.joined(separator: " — ") + "\n"
+            }
+            out += "\n"
+        }
+        return out
+    }
+}
+
+/// Playlist con i suoi brani, unità di lavoro per export e report.
+struct PlaylistGroup: Identifiable {
+    let name: String
+    let tracks: [DBTrack]
+    var id: String { name }
+}
+
+/// Report a video delle playlist la cui durata totale è fuori dal range [shortMin, longMin] (in minuti interi).
+private struct DurationReportView: View {
+    let groups: [PlaylistGroup]
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var checkShort = true
+    @State private var shortMin = 60
+    @State private var checkLong = true
+    @State private var longMin = 120
+
+    private struct Finding: Identifiable {
+        let id = UUID()
+        let playlist: String
+        let tracks: [DBTrack]
+        let totalSeconds: Double
+        let tooShort: Bool
+        var offByMinutes: Int {
+            let totalMinutes = totalSeconds / 60
+            return tooShort
+                ? Int((Double(shortMinAtCreation) - totalMinutes).rounded(.up))
+                : Int((totalMinutes - Double(longMinAtCreation)).rounded(.up))
+        }
+        let shortMinAtCreation: Int
+        let longMinAtCreation: Int
+    }
+
+    private var findings: [Finding] {
+        var result: [Finding] = []
+        for group in groups {
+            let totalSeconds = group.tracks.reduce(0.0) { $0 + $1.duration }
+            let totalMinutes = totalSeconds / 60
+            let sortedTracks = group.tracks.sorted { $0.duration < $1.duration }
+            if checkShort && totalMinutes < Double(shortMin) {
+                result.append(Finding(playlist: group.name, tracks: sortedTracks, totalSeconds: totalSeconds, tooShort: true, shortMinAtCreation: shortMin, longMinAtCreation: longMin))
+            } else if checkLong && totalMinutes > Double(longMin) {
+                result.append(Finding(playlist: group.name, tracks: sortedTracks, totalSeconds: totalSeconds, tooShort: false, shortMinAtCreation: shortMin, longMinAtCreation: longMin))
+            }
+        }
+        return result.sorted { $0.playlist.localizedCaseInsensitiveCompare($1.playlist) == .orderedAscending }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Report durate").font(.headline)
+                Spacer()
+                Button("Chiudi") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+            Divider()
+
+            HStack(spacing: 16) {
+                Toggle(isOn: $checkShort) { Text("Playlist più corte di") }
+                stepperField(value: $shortMin).disabled(!checkShort)
+                Text("min").foregroundStyle(.secondary)
+                Divider().frame(height: 18)
+                Toggle(isOn: $checkLong) { Text("Playlist più lunghe di") }
+                stepperField(value: $longMin).disabled(!checkLong)
+                Text("min").foregroundStyle(.secondary)
+                Spacer()
+                Text("\(findings.count) playlist").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            Divider()
+
+            if findings.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "checkmark.circle").font(.system(size: 30)).foregroundStyle(.secondary)
+                    Text("Nessuna playlist fuori range").foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(findings) { f in
+                        Section {
+                            ForEach(f.tracks, id: \.persistentID) { t in
+                                HStack(spacing: 8) {
+                                    Text(t.name.isEmpty ? "(senza titolo)" : t.name).lineLimit(1)
+                                    Text(t.artist).foregroundStyle(.secondary).lineLimit(1)
+                                    Spacer()
+                                    Text(Self.formatDuration(t.duration))
+                                        .font(.system(.body, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .font(.system(size: 12))
+                            }
+                        } header: {
+                            HStack(spacing: 6) {
+                                Image(systemName: f.tooShort ? "arrow.down.right.circle" : "arrow.up.right.circle")
+                                    .foregroundStyle(f.tooShort ? .orange : .blue)
+                                Text(f.playlist)
+                                Spacer()
+                                Text(Self.formatDuration(f.totalSeconds))
+                                    .font(.system(.body, design: .monospaced))
+                                Text(f.tooShort ? "(-\(f.offByMinutes) min sotto soglia)" : "(+\(f.offByMinutes) min oltre soglia)")
+                                    .foregroundStyle(f.tooShort ? .orange : .blue)
+                            }
+                        }
+                    }
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: true))
+            }
+        }
+        .frame(minWidth: 560, minHeight: 420)
+    }
+
+    private func stepperField(value: Binding<Int>) -> some View {
+        HStack(spacing: 4) {
+            TextField("", value: value, format: .number)
+                .frame(width: 48)
+                .multilineTextAlignment(.trailing)
+                .textFieldStyle(.roundedBorder)
+            Stepper("", value: value, in: 0...600, step: 1).labelsHidden()
+        }
+    }
+
+    static func formatDuration(_ seconds: Double) -> String {
+        let s = Int(seconds.rounded())
+        return "\(s / 60):" + String(format: "%02d", s % 60)
     }
 }

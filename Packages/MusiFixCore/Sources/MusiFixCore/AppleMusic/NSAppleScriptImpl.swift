@@ -497,16 +497,29 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
     /// ogni playlist normale e cartella. Righe tab-delimitate, trackIDs separati
     /// da virgola. Un `get persistent ID of every track` per playlist.
     public func playlistMembership() async throws -> [PlaylistMembership] {
+        // Le cartelle vanno enumerate dalla collezione dedicata `folder playlists`,
+        // NON da `user playlists`: quest'ultima non le contiene affatto e, inoltre,
+        // un folder ha un `persistent ID` diverso a seconda della collezione da cui
+        // vi si accede. L'ID visto in `folder playlists` è quello che i figli
+        // riportano come `parent` — quindi solo così cartelle e figli si agganciano.
         let script = """
         tell application "Music"
             set od to AppleScript's text item delimiters
             set out to ""
+            repeat with p in folder playlists
+                try
+                    set pid to persistent ID of p
+                    set pname to name of p
+                    set parentID to ""
+                    try
+                        set parentID to persistent ID of parent of p
+                    end try
+                    set out to out & pid & tab & pname & tab & "true" & tab & parentID & tab & "" & linefeed
+                end try
+            end repeat
             repeat with p in user playlists
                 try
-                    set sk to special kind of p
-                    set isF to (sk is folder)
-                    set includeIt to isF or ((smart of p is false) and (sk is none))
-                    if includeIt then
+                    if (smart of p is false) and (special kind of p is none) then
                         set pid to persistent ID of p
                         set pname to name of p
                         set parentID to ""
@@ -514,12 +527,12 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
                             set parentID to persistent ID of parent of p
                         end try
                         set tids to ""
-                        if not isF then
+                        try
                             set AppleScript's text item delimiters to ","
                             set tids to ((get persistent ID of every track of p) as string)
                             set AppleScript's text item delimiters to od
-                        end if
-                        set out to out & pid & tab & pname & tab & (isF as string) & tab & parentID & tab & tids & linefeed
+                        end try
+                        set out to out & pid & tab & pname & tab & "false" & tab & parentID & tab & tids & linefeed
                     end if
                 end try
             end repeat

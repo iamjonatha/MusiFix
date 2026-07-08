@@ -226,4 +226,10 @@ pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
 ## Anomalie
 
 - ✅ **Copertina "Cerca online"**: la sheet ora si chiude dopo "Applica a questo brano/album" e l'editor rilegge la copertina con qualche tentativo (la persistenza nella cloud library non è immediata, per questo prima "non sembrava salvata"). Fix in `EnrichmentSearchView.swift` + `ArtworkEditorView.swift`.
+- Vengono ancora indicati come in cloud molti brani che invece sono scaricati e presenti sul file system, verificati anche da Apple Music: il file è presente. Nemmeno indicizzare di nuovo la libreria risolve il problema
+
+Da valutare
+
+- analizzatore playlist con Apple Intelligence: sequenza, mood ecc. necessario analisi del brano (tonalità, tempo, mood), eventuali artisti ripetuti, densità dei generi. magari chiedere se la playlist deve essere coerente, variegata, bilanciata
+- report (a video, esportabile su markdown) di tutti gli album per cui nessuna traccia ha almeno una riproduzione
 

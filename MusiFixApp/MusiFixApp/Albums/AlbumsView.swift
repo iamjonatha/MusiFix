@@ -29,6 +29,8 @@ struct AlbumsView: View {
     @State private var ignoredAlbumKeys: Set<String> = []
     @State private var selection: Set<String> = []
     @State private var batchEditAlbums: [AlbumGroup]?
+    /// Se impostato (da "Passa a vista album"), mostra solo quest'album invece dell'elenco generico.
+    @State private var pinnedAlbumKey: String? = nil
 
     enum Filter: String, CaseIterable, Identifiable {
         case all, incomplete, unknown, complete, mixedCloud
@@ -45,6 +47,9 @@ struct AlbumsView: View {
     }
 
     private var filtered: [AlbumGroup] {
+        if let key = pinnedAlbumKey {
+            return albums.filter { $0.key == key }
+        }
         let byCategory: [AlbumGroup]
         switch filter {
         case .all:        byCategory = albums
@@ -63,17 +68,31 @@ struct AlbumsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Picker("", selection: $filter) {
-                    ForEach(Filter.allCases) { f in Text(f.label).tag(f) }
+            if let key = pinnedAlbumKey, let album = albums.first(where: { $0.key == key }) {
+                HStack {
+                    Image(systemName: "pin.fill").foregroundStyle(.secondary)
+                    Text("Vista filtrata sull'album \u{201C}\(album.album)\u{201D}")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Mostra tutti gli album") { pinnedAlbumKey = nil }
+                        .font(.caption)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 420)
-                Spacer()
-                Text("\(filtered.count) album")
-                    .font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.08))
+                Divider()
+            } else {
+                HStack {
+                    Picker("", selection: $filter) {
+                        ForEach(Filter.allCases) { f in Text(f.label).tag(f) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 420)
+                    Spacer()
+                    Text("\(filtered.count) album")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
             }
-            .padding(.horizontal, 16).padding(.vertical, 8)
 
             // ── Verifica online (Fase D) ────────────────────────────────────────
             HStack(spacing: 8) {
@@ -183,9 +202,10 @@ struct AlbumsView: View {
         }
     }
 
-    /// Seleziona e scrolla all'album indicato (usato da "Passa a vista album").
+    /// Filtra la vista sull'album indicato e lo seleziona (usato da "Passa a vista album").
     private func focus(_ key: String?, proxy: ScrollViewProxy) {
         guard let key, albums.contains(where: { $0.key == key }) else { return }
+        pinnedAlbumKey = key
         selection = [key]
         withAnimation { proxy.scrollTo(key, anchor: .center) }
     }
@@ -1190,6 +1210,11 @@ private struct AlbumBatchEditSheet: View {
             return tracks.dropFirst().allSatisfy { $0[keyPath: kp] == first } ? first : nil
         }
         if let v = common(\.albumArtist) { albumArtist = v }
+        if albumArtist.isEmpty, let a = common(\.artist), !a.isEmpty {
+            // Album Artist mancante: lo deduciamo dall'Artista comune.
+            albumArtist = a
+            overrideAlbumArtist = true
+        }
         if let v = common(\.genre)       { genre = v }
         if let v = common(\.year), v > 0 { yearText = "\(v)" }
     }

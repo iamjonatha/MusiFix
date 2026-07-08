@@ -179,6 +179,7 @@ struct TrackTableView: NSViewRepresentable {
         private var menuTargetPIDs: [String] = []
         private var menuTargetTracks: [DBTrack] = []
         private var menuTargetTrack: DBTrack?
+        private var menuAlbumSourceTrack: DBTrack?
         private var menuIgnoreTracksToOn = true
         private var menuAlbumIgnoreToOn = true
 
@@ -240,17 +241,6 @@ struct TrackTableView: NSViewRepresentable {
             wikiItem.target = self
             menu.addItem(wikiItem)
 
-            // Passa alla vista album (per editing massivo per album).
-            if !clickedTrack.album.isEmpty {
-                let albumViewItem = NSMenuItem(
-                    title: "Passa a vista album",
-                    action: #selector(openAlbumViewAction(_:)),
-                    keyEquivalent: ""
-                )
-                albumViewItem.target = self
-                menu.addItem(albumViewItem)
-            }
-
             // ── Azioni su selezione: "- Single" ─────────────────────────────────
             // Usa la selezione corrente; se il click è fuori dalla selezione,
             // opera sulla sola riga cliccata.
@@ -260,6 +250,22 @@ struct TrackTableView: NSViewRepresentable {
             }
             menuTargetTracks = rows.compactMap { track(atRow: $0) }
             menuTargetPIDs = menuTargetTracks.map { $0.persistentID }
+
+            // Passa alla vista album (per editing massivo per album).
+            // Usa il brano rappresentativo della selezione corrente (non solo
+            // quello sotto al cursore), così se sono selezionati più brani
+            // dello stesso album si apre proprio quell'album.
+            let albumSourceTrack = menuTargetTracks.first ?? clickedTrack
+            if !albumSourceTrack.album.isEmpty {
+                let albumViewItem = NSMenuItem(
+                    title: "Passa a vista album",
+                    action: #selector(openAlbumViewAction(_:)),
+                    keyEquivalent: ""
+                )
+                albumViewItem.target = self
+                menu.addItem(albumViewItem)
+            }
+            menuAlbumSourceTrack = albumSourceTrack
             if !menuTargetPIDs.isEmpty {
                 menu.addItem(.separator())
                 let singleItem = NSMenuItem(
@@ -366,7 +372,7 @@ struct TrackTableView: NSViewRepresentable {
         }
 
         @objc func openAlbumViewAction(_ sender: NSMenuItem) {
-            guard let t = menuTargetTrack else { return }
+            guard let t = menuAlbumSourceTrack else { return }
             onOpenAlbumView(t)
         }
 

@@ -118,6 +118,13 @@ struct BatchEditorView: View {
         }
         if let v = common(\.artist)      { artist      = v }
         if let v = common(\.albumArtist) { albumArtist = v }
+        if albumArtist.isEmpty, !artist.isEmpty {
+            // Album Artist mancante su tutti i brani selezionati: lo deduciamo
+            // dall'Artista e lo proponiamo già valorizzato (l'utente può
+            // comunque disattivare il campo prima di applicare).
+            albumArtist = artist
+            overrideAlbumArtist = true
+        }
         if let v = common(\.album)       { album       = v }
         if let v = common(\.genre)       { genre       = v }
         if let v = common(\.comment)     { comment     = v }

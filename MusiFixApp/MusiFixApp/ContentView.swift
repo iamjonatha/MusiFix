@@ -99,7 +99,15 @@ struct ContentView: View {
                 }
                 .help("Normalizzazione generi e artisti")
 
-                Picker("", selection: $viewMode) {
+                Picker("", selection: Binding(
+                    get: { viewMode },
+                    set: { newValue in
+                        // Selezionando manualmente il tab Album si esce dal
+                        // filtro impostato da "Passa a vista album".
+                        if newValue == .albums { albumFocusKey = nil }
+                        viewMode = newValue
+                    }
+                )) {
                     Image(systemName: "music.note.list").tag(ViewMode.tracks)
                     Image(systemName: "square.stack").tag(ViewMode.albums)
                     Image(systemName: "list.bullet.rectangle.portrait").tag(ViewMode.playlists)
@@ -473,7 +481,7 @@ struct ContentView: View {
             HStack {
                 Text("\(browser.totalCount) brani")
                     .font(.caption).foregroundStyle(.secondary)
-                if !browser.selectedPIDs.isEmpty {
+                if viewMode == .tracks && !browser.selectedPIDs.isEmpty {
                     Text("· \(browser.selectedPIDs.count) selezionati")
                         .font(.caption).foregroundStyle(.secondary)
                 }
