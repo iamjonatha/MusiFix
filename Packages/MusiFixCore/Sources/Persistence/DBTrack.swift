@@ -37,6 +37,8 @@ public struct DBTrack: Codable, FetchableRecord, PersistableRecord, Sendable {
 
     public var musicDateAdded: Date?
     public var musicModDate: Date?         // modificationDate da Music
+    public var playedCount: Int            // numero di riproduzioni (Fase 21)
+    public var playedDate: Date?           // ultima riproduzione (Fase 21)
     public var indexedAt: Date            // quando è stato indicizzato/aggiornato
 
     /// Anno di aggiunta a Music, materializzato da `musicDateAdded` (nil se assente).
@@ -81,6 +83,8 @@ public struct DBTrack: Codable, FetchableRecord, PersistableRecord, Sendable {
         cloudStatus: String = "",
         musicDateAdded: Date?,
         musicModDate: Date?,
+        playedCount: Int = 0,
+        playedDate: Date? = nil,
         indexedAt: Date
     ) {
         self.persistentID = persistentID
@@ -111,6 +115,8 @@ public struct DBTrack: Codable, FetchableRecord, PersistableRecord, Sendable {
         self.cloudStatus = cloudStatus
         self.musicDateAdded = musicDateAdded
         self.musicModDate = musicModDate
+        self.playedCount = playedCount
+        self.playedDate = playedDate
         self.indexedAt = indexedAt
         self.artistNormalized = artist.lowercased()
         self.albumNormalized = album.lowercased()

@@ -94,6 +94,8 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 @property (copy, readonly) NSDate *modificationDate;
 @property (readonly) NSInteger databaseID;
 @property (readonly) MusicEClS cloudStatus;
+@property NSInteger playedCount;
+@property (copy) NSDate *playedDate;
 - (SBElementArray<MusicArtwork *> *)artworks;
 - (void)delete;
 /// Duplica il track in un contenitore (es. una playlist); restituisce la nuova traccia.

@@ -101,11 +101,14 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
             set dadds to date added of (tracks \(start) thru \(end) of lib)
             set mods  to modification date of (tracks \(start) thru \(end) of lib)
             set csts  to cloud status of (tracks \(start) thru \(end) of lib)
+            set pcnts to played count of (tracks \(start) thru \(end) of lib)
+            set pdats to played date of (tracks \(start) thru \(end) of lib)
             set output to ""
             set n to count of pids
             repeat with i from 1 to n
                 set row to (item i of pids) as string & tab & (item i of dbids) as string & tab & (item i of nms) as string & tab & (item i of arts) as string & tab & (item i of aarts) as string & tab & (item i of albs) as string & tab & (item i of yrs) as string & tab & (item i of gens) as string & tab & (item i of coms) as string & tab & (item i of comps) as string & tab & (item i of tnums) as string & tab & (item i of tcnts) as string & tab & (item i of dnums) as string & tab & (item i of dcnts) as string & tab & (item i of durs) as string & tab & (item i of brs) as string & tab & (item i of srs) as string & tab & (item i of knds) as string
                 set row to row & tab & my epochString(item i of dadds, refDate) & tab & my epochString(item i of mods, refDate) & tab & ((item i of csts) as string)
+                set row to row & tab & (item i of pcnts) as string & tab & my epochString(item i of pdats, refDate)
                 set output to output & row & return
             end repeat
         end tell
@@ -113,6 +116,50 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
         """
         let raw = try runAppleScript(script)
         return parseTabDelimitedTracks(raw)
+    }
+
+    /// Fetch leggero (persistentID + playedCount + playedDate) per il refresh dedicato
+    /// delle riproduzioni (Fase 21): l'ascolto di un brano non sempre aggiorna la
+    /// `modification date`, quindi il sync incrementale (basato sul diff modDate) può
+    /// perdere gli aggiornamenti di play count. Da rilanciare prima del report album
+    /// non riprodotti, o come step del sync automatico.
+    public func playCountChunk(from start: Int, to end: Int) async throws
+        -> [(persistentID: String, playedCount: Int, playedDate: Double?)] {
+        let script = """
+        on epochString(d, refDate)
+            if d is missing value then return ""
+            return ((d - refDate) as string)
+        end epochString
+
+        set refDate to current date
+        set day of refDate to 1
+        set month of refDate to January
+        set year of refDate to 1970
+        set time of refDate to 0
+
+        tell application "Music"
+            set lib to library playlist 1
+            set pids to persistent ID of (tracks \(start) thru \(end) of lib)
+            set pcnts to played count of (tracks \(start) thru \(end) of lib)
+            set pdats to played date of (tracks \(start) thru \(end) of lib)
+            set output to ""
+            set n to count of pids
+            repeat with i from 1 to n
+                set output to output & ((item i of pids) as string) & tab & ((item i of pcnts) as string) & tab & my epochString(item i of pdats, refDate) & return
+            end repeat
+        end tell
+        return output
+        """
+        let raw = try runAppleScript(script)
+        return raw.components(separatedBy: "\r")
+            .filter { !$0.isEmpty }
+            .compactMap { line in
+                let parts = line.components(separatedBy: "\t")
+                guard let pid = parts.first, !pid.isEmpty, pid != "missing value" else { return nil }
+                let count = parts.count >= 2 ? (Int(parts[1]) ?? 0) : 0
+                let epoch: Double? = parts.count >= 3 ? epochDouble(parts[2]) : nil
+                return (pid, count, epoch)
+            }
     }
 
     /// Fetch leggero per il diff del sync incrementale: solo persistentID +
@@ -238,6 +285,8 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
                 let dateAdded = parts.count > 18 ? dateFromEpoch(parts[18]) : nil
                 let modDate   = parts.count > 19 ? dateFromEpoch(parts[19]) : nil
                 let cloud     = parts.count > 20 ? cloudCode(parts[20]) : ""
+                let playCount = parts.count > 21 ? (Int(mv(parts[21])) ?? 0) : 0
+                let playDate  = parts.count > 22 ? dateFromEpoch(parts[22]) : nil
                 return Track(
                     persistentID: pid,
                     databaseID: Int(parts[1]) ?? 0,
@@ -260,7 +309,9 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
                     kind: mv(parts[17]),
                     cloudStatus: cloud,
                     dateAdded: dateAdded,
-                    modificationDate: modDate
+                    modificationDate: modDate,
+                    playedCount: playCount,
+                    playedDate: playDate
                 )
             }
     }
@@ -334,6 +385,7 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
             set row to row & tab & (bit rate of t)
             set row to row & tab & (sample rate of t)
             set row to row & tab & (kind of t)
+            set row to row & tab & (played count of t)
             return row
         end tell
         """
@@ -361,7 +413,8 @@ public final class NSAppleScriptImpl: AppleMusicBridge, @unchecked Sendable {
             duration: parseLocaleDouble(parts[15]),
             bitRate: Int(parts[16]) ?? 0,
             sampleRate: parseLocaleDouble(parts[17]),
-            kind: parts[18]
+            kind: parts[18],
+            playedCount: parts.count > 19 ? (Int(parts[19]) ?? 0) : 0
         )
     }
 

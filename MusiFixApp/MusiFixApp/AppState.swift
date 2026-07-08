@@ -21,6 +21,7 @@ final class AppState: ObservableObject {
     let orphanService: OrphanScanService
     let ignoreService: IgnoreService
     let playlistService: PlaylistService
+    let playlistAnalysisService: PlaylistAnalysisService
     let fileCopyService = FileCopyService()
 
     @Published var indexProgress: IndexProgress = .init(
@@ -61,6 +62,7 @@ final class AppState: ObservableObject {
         self.orphanService = OrphanScanService(db: db)
         self.ignoreService = IgnoreService(db: db)
         self.playlistService = PlaylistService(bridge: bridge)
+        self.playlistAnalysisService = PlaylistAnalysisService(db: db)
 
         configureAutoSync()
     }

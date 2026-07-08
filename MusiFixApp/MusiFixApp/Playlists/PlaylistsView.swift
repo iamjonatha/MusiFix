@@ -20,6 +20,7 @@ struct PlaylistsView: View {
     @State private var tracks: [DBTrack] = []
     @State private var scanDone = true
     @State private var showDurationReport = false
+    @State private var showAnalysis = false
 
     /// Playlist effettivamente coinvolte dalla selezione: le cartelle selezionate
     /// vengono espanse nelle loro figlie; risultato de-duplicato e ordinato.
@@ -57,6 +58,11 @@ struct PlaylistsView: View {
         .onAppear { reload() }
         .sheet(isPresented: $showDurationReport) {
             DurationReportView(groups: groupedTracks())
+        }
+        .sheet(isPresented: $showAnalysis) {
+            if let pl = singlePlaylist {
+                PlaylistAnalysisSheet(appState: appState, playlistID: pl.id, playlistName: pl.name)
+            }
         }
     }
 
@@ -159,6 +165,13 @@ struct PlaylistsView: View {
                 }
                 .disabled(tracks.allSatisfy { $0.locationPath == nil })
                 .help("Copia i file locali dei brani in una sottocartella col nome della playlist")
+                Button {
+                    showAnalysis = true
+                } label: {
+                    Label("Analizza playlist…", systemImage: "sparkles")
+                }
+                .disabled(tracks.isEmpty)
+                .help("Analizza sequenza, artisti e generi della playlist (metadati + euristiche, Apple Intelligence se disponibile)")
             }
         }
         .padding(10)
@@ -438,5 +451,222 @@ private struct DurationReportView: View {
     static func formatDuration(_ seconds: Double) -> String {
         let s = Int(seconds.rounded())
         return "\(s / 60):" + String(format: "%02d", s % 60)
+    }
+}
+
+/// Sheet di analisi playlist (Fase 23): sceglie l'obiettivo, mostra i punteggi
+/// euristici (sempre calcolati) e, se disponibile, la narrativa Apple Intelligence.
+private struct PlaylistAnalysisSheet: View {
+    let appState: AppState
+    let playlistID: String
+    let playlistName: String
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var goal: PlaylistGoal = .balanced
+    @State private var analysis: PlaylistAnalysis?
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Analizza playlist").font(.headline)
+                    Text(playlistName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                if let analysis {
+                    Button {
+                        exportMarkdown(analysis)
+                    } label: {
+                        Label("Esporta Markdown…", systemImage: "square.and.arrow.up")
+                    }
+                }
+                Button("Chiudi") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+            Divider()
+
+            HStack(spacing: 12) {
+                Text("Obiettivo desiderato").foregroundStyle(.secondary)
+                Picker("", selection: $goal) {
+                    ForEach(PlaylistGoal.allCases) { g in Text(g.label).tag(g) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 280)
+                Spacer()
+                if isLoading { ProgressView().scaleEffect(0.6) }
+                Button(analysis == nil ? "Analizza" : "Rianalizza") { runAnalysis() }
+                    .disabled(isLoading)
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .onChange(of: goal) { _, _ in if analysis != nil { runAnalysis() } }
+            Divider()
+
+            if let err = errorMessage {
+                Spacer(); Text(err).foregroundStyle(.red).padding(); Spacer()
+            } else if let analysis {
+                ScrollView { analysisContent(analysis) }
+            } else if isLoading {
+                Spacer(); ProgressView("Analisi in corso…"); Spacer()
+            } else {
+                Spacer()
+                Image(systemName: "sparkles").font(.system(size: 30)).foregroundStyle(.secondary)
+                Text("Scegli l'obiettivo e premi Analizza.").foregroundStyle(.secondary).padding(.top, 4)
+                Spacer()
+            }
+        }
+        .frame(width: 560, height: 560)
+        .onAppear { runAnalysis() }
+    }
+
+    @ViewBuilder
+    private func analysisContent(_ a: PlaylistAnalysis) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 20) {
+                scoreGauge("Coerenza", a.scores.coherence, .blue)
+                scoreGauge("Varietà", a.scores.variety, .green)
+                scoreGauge("Bilanciamento", a.scores.balance, .orange)
+            }
+
+            if let narrative = a.narrative {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Apple Intelligence", systemImage: "sparkles")
+                        .font(.caption.bold()).foregroundStyle(.purple)
+                    Text(narrative.text).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+                    ForEach(narrative.suggestions, id: \.self) { s in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("•")
+                            Text(s).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .font(.system(size: 12))
+                    }
+                }
+                .padding(10)
+                .background(Color.purple.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else if let reason = a.intelligenceUnavailableReason {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+
+            artistsSection(a.features)
+            genresSection(a.features)
+            durationsSection(a.features)
+        }
+        .padding(16)
+    }
+
+    private func scoreGauge(_ label: String, _ value: Int, _ color: Color) -> some View {
+        VStack(spacing: 4) {
+            ZStack {
+                Circle().stroke(color.opacity(0.15), lineWidth: 6)
+                Circle()
+                    .trim(from: 0, to: CGFloat(value) / 100)
+                    .stroke(color, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Text("\(value)").font(.system(size: 14, weight: .bold))
+            }
+            .frame(width: 56, height: 56)
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func artistsSection(_ f: PlaylistFeatures) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Artisti").font(.caption.bold()).foregroundStyle(.secondary)
+            if f.maxConsecutiveRepeats > 1 {
+                Text("Fino a \(f.maxConsecutiveRepeats) brani consecutivi dello stesso artista.")
+                    .font(.caption2).foregroundStyle(.orange)
+            }
+            ForEach(f.topArtists, id: \.name) { stat in
+                HStack {
+                    Text(stat.name).font(.system(size: 12)).lineLimit(1)
+                    Spacer()
+                    Text("\(stat.count) · \(Int(stat.percentage))%")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func genresSection(_ f: PlaylistFeatures) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Generi (diversità \(Int(f.genreDiversityIndex * 100))%)")
+                .font(.caption.bold()).foregroundStyle(.secondary)
+            ForEach(f.genreDistribution.prefix(5), id: \.name) { stat in
+                HStack {
+                    Text(stat.name).font(.system(size: 12)).lineLimit(1)
+                    Spacer()
+                    Text("\(stat.count) · \(Int(stat.percentage))%")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func durationsSection(_ f: PlaylistFeatures) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Durate").font(.caption.bold()).foregroundStyle(.secondary)
+            HStack {
+                Text("Media \(DurationReportView.formatDuration(f.averageDuration))")
+                Spacer()
+                if let range = f.yearRange {
+                    Text("Anni \(range.lowerBound)–\(range.upperBound) (\(f.distinctDecadesCount) decadi)")
+                }
+            }
+            .font(.system(size: 12)).foregroundStyle(.secondary)
+        }
+    }
+
+    private func runAnalysis() {
+        isLoading = true; errorMessage = nil
+        let pid = playlistID, name = playlistName, g = goal
+        Task {
+            do {
+                let result = try await appState.playlistAnalysisService.analyze(
+                    playlistID: pid, playlistName: name, goal: g)
+                await MainActor.run { analysis = result; isLoading = false }
+            } catch {
+                await MainActor.run { errorMessage = error.localizedDescription; isLoading = false }
+            }
+        }
+    }
+
+    private func exportMarkdown(_ a: PlaylistAnalysis) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = "\(playlistName)-analisi.md"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let md = Self.buildMarkdown(playlistName: playlistName, goal: goal, analysis: a)
+        do {
+            try md.data(using: .utf8)?.write(to: url)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Impossibile salvare il file"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
+    }
+
+    private static func buildMarkdown(playlistName: String, goal: PlaylistGoal, analysis a: PlaylistAnalysis) -> String {
+        var out = "## \(playlistName)\n\n"
+        out += "Obiettivo: \(goal.label)\n\n"
+        out += "- Coerenza: \(a.scores.coherence)/100\n"
+        out += "- Varietà: \(a.scores.variety)/100\n"
+        out += "- Bilanciamento: \(a.scores.balance)/100\n\n"
+        if let n = a.narrative {
+            out += n.text + "\n\n"
+            for s in n.suggestions { out += "- \(s)\n" }
+            out += "\n"
+        }
+        out += "### Artisti principali\n\n"
+        for stat in a.features.topArtists { out += "- \(stat.name): \(stat.count) (\(Int(stat.percentage))%)\n" }
+        out += "\n### Generi\n\n"
+        for stat in a.features.genreDistribution.prefix(5) { out += "- \(stat.name): \(stat.count) (\(Int(stat.percentage))%)\n" }
+        return out
     }
 }

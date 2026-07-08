@@ -140,7 +140,9 @@ extension Track {
             kind: (d[MBKeyKind] as? String) ?? "",
             cloudStatus: (d[MBKeyCloudStatus] as? String) ?? "",
             dateAdded: d[MBKeyDateAdded] as? Date,
-            modificationDate: d[MBKeyModDate] as? Date
+            modificationDate: d[MBKeyModDate] as? Date,
+            playedCount: (d[MBKeyPlayedCount] as? Int) ?? 0,
+            playedDate: d[MBKeyPlayedDate] as? Date
         )
     }
 }

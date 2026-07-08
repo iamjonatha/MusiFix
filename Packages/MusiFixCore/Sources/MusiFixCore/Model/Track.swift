@@ -25,6 +25,8 @@ public struct Track: Sendable, Identifiable {
     public let cloudStatus: String      // codice 4-char Music.app: kMat/kUpl/kPur/kSub/…
     public let dateAdded: Date?
     public let modificationDate: Date?
+    public let playedCount: Int
+    public let playedDate: Date?
 
     public init(
         persistentID: String,
@@ -48,7 +50,9 @@ public struct Track: Sendable, Identifiable {
         kind: String = "",
         cloudStatus: String = "",
         dateAdded: Date? = nil,
-        modificationDate: Date? = nil
+        modificationDate: Date? = nil,
+        playedCount: Int = 0,
+        playedDate: Date? = nil
     ) {
         self.persistentID = persistentID
         self.databaseID = databaseID
@@ -72,6 +76,8 @@ public struct Track: Sendable, Identifiable {
         self.cloudStatus = cloudStatus
         self.dateAdded = dateAdded
         self.modificationDate = modificationDate
+        self.playedCount = playedCount
+        self.playedDate = playedDate
     }
 }
 

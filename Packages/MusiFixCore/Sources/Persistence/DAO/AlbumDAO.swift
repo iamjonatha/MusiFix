@@ -23,6 +23,8 @@ public struct AlbumGroup: Sendable, Identifiable {
     public let pids: [String]
     /// Conteggio tracce per codice cloudStatus (es. ["kMat": 8, "kUpl": 2]).
     public let cloudStatusCounts: [String: Int]
+    /// Anno dell'album (minimo non-zero tra le tracce). `nil` se assente.
+    public let year: Int?
 
     /// True se le tracce non hanno tutte lo stesso stato iCloud (Fase F).
     public var hasMixedCloudStatus: Bool {
@@ -39,17 +41,71 @@ public struct AlbumGroup: Sendable, Identifiable {
     public init(
         key: String, albumArtist: String, album: String,
         actualCount: Int, tagTrackCount: Int, tagDiscCount: Int,
-        cloudOnlyCount: Int, pids: [String], cloudStatusCounts: [String: Int]
+        cloudOnlyCount: Int, pids: [String], cloudStatusCounts: [String: Int],
+        year: Int? = nil
     ) {
         self.key = key; self.albumArtist = albumArtist; self.album = album
         self.actualCount = actualCount; self.tagTrackCount = tagTrackCount
         self.tagDiscCount = tagDiscCount; self.cloudOnlyCount = cloudOnlyCount
         self.pids = pids; self.cloudStatusCounts = cloudStatusCounts
+        self.year = year
     }
+}
+
+/// Statistiche di riproduzione per album (Fase 22): tracce totali, play totali e
+/// nomi delle tracce con almeno un ascolto (per evidenziare l'eccezione nei
+/// report "parziali"). Include gli album cloud-only: `playedCount` è tracciato
+/// da Music anche per tracce non scaricate localmente.
+public struct AlbumPlayStats: Sendable, Identifiable {
+    public var id: String { key }
+    public let key: String
+    public let albumArtist: String
+    public let album: String
+    public let trackCount: Int
+    public let totalPlays: Int
+    public let playedTrackNames: [String]
+    /// Aggiunta più recente tra le tracce dell'album (per il filtro "giorni di grazia").
+    public let dateAdded: Date?
 }
 
 /// Query di aggregazione a livello di album.
 public struct AlbumDAO: Sendable {
+
+    /// Statistiche di riproduzione per tutti gli album (esclusi singoli e vuoti).
+    /// Base per il report "album mai/quasi mai riprodotti" (Fase 22).
+    public static func fetchAlbumPlayStats(in db: Database) throws -> [AlbumPlayStats] {
+        let sql = """
+            SELECT
+                MIN(COALESCE(NULLIF(albumArtist,''), artist)) AS dispArtist,
+                MIN(album) AS dispAlbum,
+                LOWER(COALESCE(NULLIF(albumArtist,''), artist)) || CHAR(31) || LOWER(album) AS gkey,
+                COUNT(*) AS actualCount,
+                SUM(playedCount) AS totalPlays,
+                MAX(musicDateAdded) AS lastAdded,
+                GROUP_CONCAT(CASE WHEN playedCount > 0 THEN name END, CHAR(31)) AS playedNames
+            FROM track
+            WHERE TRIM(album) != '' AND album NOT LIKE '% - Single'
+            GROUP BY gkey
+            """
+        return try Row.fetchAll(db, sql: sql).map { row in
+            let namesRaw: String? = row["playedNames"]
+            let names = (namesRaw ?? "")
+                .components(separatedBy: "\u{1F}")
+                .filter { !$0.isEmpty }
+            return AlbumPlayStats(
+                key: row["gkey"],
+                albumArtist: row["dispArtist"] ?? "",
+                album: row["dispAlbum"] ?? "",
+                trackCount: row["actualCount"] ?? 0,
+                totalPlays: row["totalPlays"] ?? 0,
+                playedTrackNames: names,
+                dateAdded: row["lastAdded"]
+            )
+        }
+    }
+}
+
+extension AlbumDAO {
 
     /// Raggruppa le tracce per album (albumArtist+album normalizzati),
     /// escludendo album vuoti e singoli (`album LIKE '% - Single'`).
@@ -63,6 +119,7 @@ public struct AlbumDAO: Sendable {
                 MAX(trackCount) AS tagTrackCount,
                 MAX(discCount) AS tagDiscCount,
                 SUM(isCloudOnly) AS cloudOnlyCount,
+                MIN(NULLIF(year, 0)) AS year,
                 GROUP_CONCAT(persistentID, ',') AS pids,
                 GROUP_CONCAT(cloudStatus, ',') AS cloudStatuses
             FROM track
@@ -85,7 +142,8 @@ public struct AlbumDAO: Sendable {
                 tagDiscCount: row["tagDiscCount"] ?? 0,
                 cloudOnlyCount: row["cloudOnlyCount"] ?? 0,
                 pids: pidString.isEmpty ? [] : pidString.components(separatedBy: ","),
-                cloudStatusCounts: counts
+                cloudStatusCounts: counts,
+                year: row["year"]
             )
         }
     }

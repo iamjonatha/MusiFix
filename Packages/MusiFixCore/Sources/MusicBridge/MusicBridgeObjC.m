@@ -27,6 +27,8 @@ NSString * const MBKeyKind         = @"kind";
 NSString * const MBKeyCloudStatus  = @"cloudStatus";
 NSString * const MBKeyDateAdded    = @"dateAdded";
 NSString * const MBKeyModDate      = @"modificationDate";
+NSString * const MBKeyPlayedCount  = @"playedCount";
+NSString * const MBKeyPlayedDate   = @"playedDate";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -78,6 +80,8 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
     }
     d[MBKeyDateAdded]    = t.dateAdded ?: [NSNull null];
     d[MBKeyModDate]      = t.modificationDate ?: [NSNull null];
+    d[MBKeyPlayedCount]  = @(t.playedCount);
+    d[MBKeyPlayedDate]   = t.playedDate ?: [NSNull null];
     return [d copy];
 }
 

@@ -594,6 +594,48 @@ public actor IndexService {
         return scanned
     }
 
+    // ── Refresh conteggio riproduzioni (Fase 21) ──────────────────────────────
+
+    /// Rilegge `playedCount`/`playedDate` per tutti i brani. Necessario perché
+    /// l'ascolto di un brano in Music.app non sempre aggiorna `modificationDate`:
+    /// il sync incrementale (basato sul diff di quel campo) può quindi non
+    /// accorgersi che un brano è stato riprodotto. Va lanciato on-demand (pulsante
+    /// dedicato) prima del report album non riprodotti, o incluso nella sync
+    /// automatica in background.
+    @discardableResult
+    public func refreshPlayCounts() async throws -> Int {
+        let total = try await bulkFetcher.trackCount()
+        log.info("Refresh play count avviato: \(total) brani")
+        setProgress(.init(phase: .enrichingFiles(completed: 0, total: total),
+                          processed: 0, total: total, lastSyncDate: nil))
+
+        let chunkSize = 1000
+        var start = 1
+        var scanned = 0
+        while start <= total {
+            try Task.checkCancellation()
+            let end = min(start + chunkSize - 1, total)
+            let rows = try await bulkFetcher.playCountChunk(from: start, to: end)
+            let snapshot = rows
+            try db.write { db in
+                for row in snapshot {
+                    let playedDate = row.playedDate.map { Date(timeIntervalSince1970: $0) }
+                    try db.execute(
+                        sql: "UPDATE track SET playedCount=?, playedDate=? WHERE persistentID=?",
+                        arguments: [row.playedCount, playedDate, row.persistentID]
+                    )
+                }
+            }
+            scanned += rows.count
+            start = end + 1
+            setProgress(.init(phase: .enrichingFiles(completed: scanned, total: total),
+                              processed: scanned, total: total, lastSyncDate: nil))
+        }
+        log.info("Refresh play count completato: \(scanned) brani")
+        setProgress(.init(phase: .done, processed: scanned, total: total, lastSyncDate: nil))
+        return scanned
+    }
+
     // ── Riparazione mirata brani marcati cloud-only ───────────────────────────
 
     /// Recupera la location reale per i brani attualmente marcati `isCloudOnly`
@@ -986,6 +1028,8 @@ public actor IndexService {
             cloudStatus: track.cloudStatus,
             musicDateAdded: track.dateAdded,
             musicModDate: track.modificationDate,
+            playedCount: track.playedCount,
+            playedDate: track.playedDate,
             indexedAt: Date()
         )
     }

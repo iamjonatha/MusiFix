@@ -227,9 +227,84 @@ pulsanti web = **finestra interna** (WKWebView, come Fase 14); sync automatica =
 
 - ✅ **Copertina "Cerca online"**: la sheet ora si chiude dopo "Applica a questo brano/album" e l'editor rilegge la copertina con qualche tentativo (la persistenza nella cloud library non è immediata, per questo prima "non sembrava salvata"). Fix in `EnrichmentSearchView.swift` + `ArtworkEditorView.swift`.
 - Vengono ancora indicati come in cloud molti brani che invece sono scaricati e presenti sul file system, verificati anche da Apple Music: il file è presente. Nemmeno indicizzare di nuovo la libreria risolve il problema
+- Aggiungi a playlist (meno contestuale da singolo brano: non vengono visualizzate le playlist in una sottocartella, che invece sono visibili nella vista playlist)
+- Per esportazione playlist serve ordine dei brani nella playlist, altrimenti non sarà possibile analizzare il mood della playlist, riordinare le sequenze 
 
-Da valutare
 
-- analizzatore playlist con Apple Intelligence: sequenza, mood ecc. necessario analisi del brano (tonalità, tempo, mood), eventuali artisti ripetuti, densità dei generi. magari chiedere se la playlist deve essere coerente, variegata, bilanciata
-- report (a video, esportabile su markdown) di tutti gli album per cui nessuna traccia ha almeno una riproduzione
 
+## Evolutive (serie 4) — piano dalle idee future
+
+Dalle "idee future": analizzatore playlist con Apple Intelligence e report album mai
+riprodotti. Decisioni prese con l'utente:
+- Feature 1 (analizzatore playlist): **v1 solo metadati + euristiche + FoundationModels
+  on-device**, architettura predisposta al full-audio (tempo/tonalità) in fase futura;
+  fallback alle sole euristiche se il modello Apple Intelligence non è disponibile.
+- Feature 2 (report album non riprodotti): soglia configurabile (non solo zero-play),
+  evidenziando l'eventuale unica traccia con qualche ascolto; esclude singoli e album
+  aggiunti di recente (giorni di grazia); include i cloud-only; sezione separata per i
+  "parziali" (alcune tracce riprodotte, altre no).
+
+| Fase | Funzionalità | Complessità | Rete | Dipende da | Stato |
+|---|---|---|---|---|---|
+| **21** | Cattura `playedCount`/`playedDate` dal bridge (fondamento condiviso) | Media | No | — | ✅ |
+| **22** | Report album mai/quasi-mai riprodotti | Bassa | No | 21 | ✅ |
+| **23** | Analizzatore playlist (metadati + euristiche + FoundationModels) | Alta | No (on-device) | — | ✅ |
+| **24** | *(futuro)* Analisi audio DSP: tempo/BPM → tonalità → energia | Alta | No | 23 | ⬜ (rimandata su richiesta) |
+
+Ordine di esecuzione: **21 → 22**, **23** indipendente (può procedere in parallelo);
+**24** solo dopo validazione di 23. Fase 24 rimandata su decisione esplicita
+dell'utente (sforzo/beneficio incerto): restano solo i campi `tempo`/`key`/`energy`
+predisposti (`nil`) in `PlaylistFeatures` per un'implementazione futura.
+
+### Fase 21 — Cattura `playedCount`/`playedDate`  ✅
+Il fetch bulk reale passa da AppleScript (`NSAppleScriptImpl.tracksChunk`), non dal
+bridge ObjC: aggiornati entrambi i percorsi per coerenza (il bridge ObjC è comunque
+usato per letture puntuali, es. `trackMetadata` di refresh singolo brano).
+- `MusicBridge/Music_private.h` — `MusicTrack` += `playedCount`/`playedDate`.
+- `MusicBridge/MusicBridgeObjC.{h,m}` — `MBKeyPlayedCount`/`MBKeyPlayedDate` + lettura nel dict.
+- `AppleMusic/ScriptingBridgeImpl.swift` — mapping nel `Track`.
+- `AppleMusic/NSAppleScriptImpl.swift` — `tracksChunk` include `played count`/`played date`; nuovo `playCountChunk(from:to:)` leggero (2 proprietà, come `cloudStatusChunk`); `trackMetadata` (singolo brano) include `playedCount`.
+- `Model/Track.swift`, `Persistence/DBTrack.swift` — nuovi campi `playedCount: Int`, `playedDate: Date?`.
+- `Migrations.swift` — **v12**: colonne `playedCount`/`playedDate` + indice.
+- `IndexService.buildDBTrack` — mapping; nuovo `IndexService.refreshPlayCounts()` (rilettura dedicata via `playCountChunk`, a blocchi da 1000).
+- UI: pulsante **"Aggiorna riproduzioni"** in `Albums/AlbumsView.swift` (accanto al report Fase 22).
+- ⚠️ L'ascolto di un brano non sempre aggiorna `modificationDate`: il sync incrementale può non accorgersi di nuovi play. Va lanciato `refreshPlayCounts()` on-demand prima del report (Fase 22); non è (ancora) incluso nel sync automatico di Fase 20.
+
+### Fase 22 — Report album mai/quasi-mai riprodotti  ✅
+- `AlbumDAO.fetchAlbumPlayStats(in:)`: aggrega per `gkey` (stesso raggruppamento di `fetchAlbumGroups`), esclude `'% - Single'`. Ritorna `AlbumPlayStats { albumArtist, album, trackCount, totalPlays, playedTrackNames, dateAdded }` (nomi tracce con play>0 via `GROUP_CONCAT` + `CHAR(31)` come separatore).
+- `AlbumService.unplayedAlbums(maxTotalPlays:graceDays:)`: filtra per soglia play, esclude album ignorati (Fase 13) e quelli con ultima aggiunta entro `graceDays`; espone `UnplayedAlbum.kind = .zero | .partial`.
+- UI: pulsante **"Album mai riprodotti…"** in `Albums/AlbumsView.swift` → `UnplayedAlbumsReportView` (stile `DurationReportView`): stepper soglia play massimi, stepper giorni di grazia, sezioni "Mai riprodotti"/"Parziali" (con evidenza della traccia ascoltata), export Markdown.
+- **File:** `AlbumDAO.swift`, `AlbumService.swift`, `AlbumsView.swift` (nuovo `UnplayedAlbumsReportView` privato nello stesso file).
+
+### Fase 23 — Analizzatore playlist (metadati + euristiche + FoundationModels)  ✅
+Tonalità, tempo e mood **non sono disponibili da Music.app** — v1 lavora solo su
+metadati già in `DBTrack` + FoundationModels on-device per la sintesi qualitativa.
+
+Architettura a strati, pronta ad accogliere la Fase 24 senza modifiche a scorer/UI:
+- **`PlaylistFeatures`** (struct) + protocollo **`PlaylistFeatureExtractor`**. `MetadataFeatureExtractor` calcola da `[DBTrack]`: artisti ripetuti (top-5, % dominante, ripetizioni consecutive), densità generi (distribuzione + indice di diversità di Shannon normalizzato, genere dominante %), spread anni (range, decadi distinte, deviazione standard), arco durate (media, deviazione, sequenza). Campi `averageTempo/dominantKey/averageEnergy` presenti ma `nil` in v1 (predisposti per Fase 24).
+- **`PlaylistScorer`** (euristico, sempre attivo): calcola coerenza/varietà/bilanciamento 0-100 da `PlaylistFeatures`. Implementazione: `HeuristicPlaylistScorer`.
+- **`PlaylistIntelligence`** (protocollo) + **`FoundationModelsIntelligence`** (`@available(macOS 26, *)`, verificato — SDK Xcode 26.6/macOS 26.5 presente): usa `SystemLanguageModel.default.availability`/`LanguageModelSession.respond(to:)`; narrativa + fino a 4 suggerimenti. Fallback **`UnavailableIntelligence`** se il modello non è disponibile (macOS <26, dispositivo non idoneo, funzione disattivata): la UI mostra comunque le euristiche, nessun errore bloccante.
+- **`actor PlaylistAnalysisService`** in `MusiFixCore/PlaylistAnalysis/`: orchestrazione extractor → scorer → intelligence; sceglie l'implementazione di `PlaylistIntelligence` a runtime via `if #available`.
+- UI: pulsante **"Analizza playlist…"** in `Playlists/PlaylistsView.swift` (visibile per playlist singola selezionata) → `PlaylistAnalysisSheet`: picker obiettivo (coerente/variegata/bilanciata), gauge dei 3 punteggi, sezioni artisti/generi/durate, box narrativa Apple Intelligence (o messaggio di indisponibilità), export Markdown.
+- **File:** `Packages/MusiFixCore/Sources/MusiFixCore/PlaylistAnalysis/{PlaylistFeatures,PlaylistScorer,PlaylistIntelligence,FoundationModelsIntelligence,PlaylistAnalysisService}.swift` (nuovi), `AppState.swift`, `PlaylistsView.swift`.
+
+### Fase 24 — *(futuro, rimandata)* Analisi audio DSP
+Rimandata su decisione esplicita dell'utente (sforzo alto / beneficio incerto rispetto
+a v1 metadati+euristiche): non implementata in questa sessione. Se ripresa in futuro:
+`AudioFeatureExtractor` sui file locali — **tempo/BPM** (onset detection, riuso infra Chromaprint di `Duplicates/`) → poi **tonalità** (chromagram + profili Krumhansl, richiede nuova libreria DSP, sforzo alto) → **energia**. Il *mood* resta solo approssimato da genere+tempo+energia (non ricavabile in modo affidabile senza modelli ML dedicati). Nessuna modifica a `PlaylistScorer`/UI grazie ai campi già predisposti (`nil`) in `PlaylistFeatures` dalla Fase 23.
+
+### Fase 25
+
+Genera un report (discografica.md) in cui includere: oer ogni artista con almeno un album completo, elenco degli album di quell'artista.
+
+Es.
+
+Vasco Rossi
+
+- Liberi Liberi
+
+Vinicio Capossela
+
+- Ovunque protoggi
+- Camere con vista
+- Modi

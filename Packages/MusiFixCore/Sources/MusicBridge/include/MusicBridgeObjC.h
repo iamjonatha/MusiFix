@@ -30,6 +30,8 @@ extern NSString * const MBKeyKind;        // NSString ("MPEG audio file" ecc.)
 extern NSString * const MBKeyCloudStatus; // NSString (codice 4-char: kMat/kUpl/kPur/kSub/…)
 extern NSString * const MBKeyDateAdded;   // NSDate
 extern NSString * const MBKeyModDate;     // NSDate
+extern NSString * const MBKeyPlayedCount; // NSNumber (integer)
+extern NSString * const MBKeyPlayedDate;  // NSDate
 
 /// Wrapper ScriptingBridge attorno a Music.app.
 /// Tutte le operazioni sono sincrone; devono essere chiamate da un thread/actor dedicato.

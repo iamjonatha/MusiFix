@@ -48,6 +48,101 @@ public actor AlbumService {
             .sorted { ($0.tagTrackCount - $0.actualCount) > ($1.tagTrackCount - $1.actualCount) }
     }
 
+    // ── Report discografia: album completi per artista ──────────────────────────
+
+    /// Voce di discografia: un album completo di un artista.
+    public struct DiscographyAlbum: Sendable, Identifiable {
+        public var id: String { key }
+        public let key: String
+        public let album: String
+        public let year: Int?
+    }
+
+    /// Artista con la sua discografia di album completi.
+    public struct DiscographyArtist: Sendable, Identifiable {
+        public var id: String { artist }
+        public let artist: String
+        public let albums: [DiscographyAlbum]
+    }
+
+    /// Report discografia: per ogni artista con almeno un album «completo»,
+    /// l'elenco dei suoi album completi. «Completo» = tag `trackCount` combaciante
+    /// (`.complete`) **oppure** album «senza tag» verificato completo su Store
+    /// (`storeTrackCount == actualCount`). Esclude gli album ignorati in MusiFix.
+    /// Ordinato per artista; all'interno per anno (album senza anno in fondo).
+    public func discographyReport() throws -> [DiscographyArtist] {
+        let ignored = try ignoredAlbumKeys()
+        let store = try storeInfoByKey()
+
+        func isComplete(_ g: AlbumGroup) -> Bool {
+            switch g.completeness {
+            case .complete:
+                return true
+            case .unknown:
+                guard let info = store[g.key], info.matchState == "found",
+                      let total = info.storeTrackCount else { return false }
+                return g.actualCount == total
+            default:
+                return false
+            }
+        }
+
+        let complete = try albumGroups().filter { !ignored.contains($0.key) && isComplete($0) }
+
+        let byArtist = Dictionary(grouping: complete) { $0.albumArtist }
+        return byArtist.map { artist, groups in
+            let albums = groups
+                .map { DiscographyAlbum(key: $0.key, album: $0.album, year: $0.year) }
+                .sorted {
+                    ($0.year ?? Int.max, $0.album.lowercased())
+                        < ($1.year ?? Int.max, $1.album.lowercased())
+                }
+            return DiscographyArtist(artist: artist, albums: albums)
+        }
+        .sorted { $0.artist.lowercased() < $1.artist.lowercased() }
+    }
+
+    // ── Fase 22: report album mai/quasi mai riprodotti ──────────────────────────
+
+    public struct UnplayedAlbum: Sendable, Identifiable {
+        public var id: String { key }
+        public let key: String
+        public let albumArtist: String
+        public let album: String
+        public let trackCount: Int
+        public let totalPlays: Int
+        public let playedTrackNames: [String]
+        public let dateAdded: Date?
+
+        public enum Kind: Sendable { case zero, partial }
+        public var kind: Kind { totalPlays == 0 ? .zero : .partial }
+    }
+
+    /// Album con play totali <= `maxTotalPlays`, esclusi quelli aggiunti negli
+    /// ultimi `graceDays` giorni e quelli ignorati in MusiFix. Include i
+    /// cloud-only (Music traccia `playedCount` anche per tracce non scaricate).
+    /// Richiede un giro di `IndexService.refreshPlayCounts()` per dati aggiornati
+    /// (l'ascolto non sempre tocca `modificationDate`, quindi il sync
+    /// incrementale può non accorgersene).
+    public func unplayedAlbums(maxTotalPlays: Int, graceDays: Int) throws -> [UnplayedAlbum] {
+        let ignored = try ignoredAlbumKeys()
+        let cutoff = Calendar.current.date(byAdding: .day, value: -graceDays, to: Date()) ?? .distantPast
+        let stats = try db.read { db in try AlbumDAO.fetchAlbumPlayStats(in: db) }
+        return stats
+            .filter { $0.totalPlays <= maxTotalPlays && !ignored.contains($0.key) }
+            .filter { stat in
+                guard let added = stat.dateAdded else { return true }
+                return added <= cutoff
+            }
+            .map { s in
+                UnplayedAlbum(key: s.key, albumArtist: s.albumArtist, album: s.album,
+                              trackCount: s.trackCount, totalPlays: s.totalPlays,
+                              playedTrackNames: s.playedTrackNames, dateAdded: s.dateAdded)
+            }
+            .sorted { ($0.albumArtist.lowercased(), $0.album.lowercased())
+                    < ($1.albumArtist.lowercased(), $1.album.lowercased()) }
+    }
+
     // ── Fase D: verifica online completezza + cache ─────────────────────────────
 
     /// Info Store già in cache, indicizzate per albumKey.
@@ -75,7 +170,10 @@ public actor AlbumService {
         let cachedKeys: Set<String> = force ? [] : try db.read { db in
             try Set(String.fetchAll(db, sql: "SELECT albumKey FROM album_store_info"))
         }
+        // Precedenza agli album con almeno 5 tracce in libreria cloud; gli altri
+        // a seguire. Partizione stabile: preserva l'ordine relativo in ciascun gruppo.
         let todo = candidates.filter { !cachedKeys.contains($0.key) }
+            .stablePartitioned { $0.actualCount >= 5 }
         let total = todo.count
         var done = 0
 
@@ -586,5 +684,18 @@ public actor AlbumService {
         }
         log.info("writeAlbumFields: \(items.count) tracce")
         return try await writeService.writeBatch(items)
+    }
+}
+
+private extension Array {
+    /// Partiziona in modo stabile: prima gli elementi che soddisfano `predicate`
+    /// (nell'ordine originale), poi gli altri (nell'ordine originale).
+    func stablePartitioned(by predicate: (Element) -> Bool) -> [Element] {
+        var matching: [Element] = []
+        var rest: [Element] = []
+        for e in self {
+            if predicate(e) { matching.append(e) } else { rest.append(e) }
+        }
+        return matching + rest
     }
 }

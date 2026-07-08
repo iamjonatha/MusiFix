@@ -16,6 +16,16 @@ public enum Migrations {
         migrator.registerMigration("v9_musifix_ignore", migrate: v9_musifix_ignore)
         migrator.registerMigration("v10_playlist_membership", migrate: v10_playlist_membership)
         migrator.registerMigration("v11_playlist_tables", migrate: v11_playlist_tables)
+        migrator.registerMigration("v12_played_count", migrate: v12_played_count)
+    }
+
+    // ── v12: conteggio/data riproduzioni (Fase 21) ────────────────────────────
+    private static func v12_played_count(_ db: Database) throws {
+        try db.alter(table: "track") { t in
+            t.add(column: "playedCount", .integer).notNull().defaults(to: 0)
+            t.add(column: "playedDate", .datetime)
+        }
+        try db.create(index: "track_played_count", on: "track", columns: ["playedCount"])
     }
 
     // ── v11: playlist dettagliate (Fase 19) ───────────────────────────────────

@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import MusiFixCore
 import Persistence
 
@@ -31,6 +33,14 @@ struct AlbumsView: View {
     @State private var batchEditAlbums: [AlbumGroup]?
     /// Se impostato (da "Passa a vista album"), mostra solo quest'album invece dell'elenco generico.
     @State private var pinnedAlbumKey: String? = nil
+    @State private var showUnplayedReport = false
+    @State private var isRefreshingPlayCounts = false
+    @State private var isExportingDiscography = false
+    /// Nasconde i singoli / "non album" (meno di 5 tracce in libreria).
+    @State private var hideNonAlbums = false
+
+    /// Soglia minima di tracce per considerare un gruppo un vero "album".
+    private static let albumMinTracks = 5
 
     enum Filter: String, CaseIterable, Identifiable {
         case all, incomplete, unknown, complete, mixedCloud
@@ -58,9 +68,12 @@ struct AlbumsView: View {
         case .complete:   byCategory = albums.filter { $0.completeness == .complete }
         case .mixedCloud: byCategory = albums.filter { $0.hasMixedCloudStatus }
         }
+        let byTracks = hideNonAlbums
+            ? byCategory.filter { $0.actualCount >= Self.albumMinTracks }
+            : byCategory
         let q = searchText.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return byCategory }
-        return byCategory.filter {
+        guard !q.isEmpty else { return byTracks }
+        return byTracks.filter {
             $0.album.localizedCaseInsensitiveContains(q) ||
             $0.albumArtist.localizedCaseInsensitiveContains(q)
         }
@@ -87,6 +100,12 @@ struct AlbumsView: View {
                     }
                     .pickerStyle(.segmented)
                     .frame(width: 420)
+                    Toggle(isOn: $hideNonAlbums) {
+                        Text("Solo album (≥ \(Self.albumMinTracks) tracce)")
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help("Nasconde singoli e \u{201C}non album\u{201D} con meno di \(Self.albumMinTracks) tracce in libreria")
                     Spacer()
                     Text("\(filtered.count) album")
                         .font(.caption).foregroundStyle(.secondary)
@@ -122,6 +141,27 @@ struct AlbumsView: View {
                         .font(.caption)
                         .disabled(selection.isEmpty)
                         .help("Modifica Album Artist, Anno e Genere su tutte le tracce degli album selezionati")
+                    Divider().frame(height: 14)
+                    if isRefreshingPlayCounts {
+                        ProgressView().scaleEffect(0.6)
+                        Text("Aggiornamento riproduzioni…").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Button("Aggiorna riproduzioni") { refreshPlayCounts() }
+                            .font(.caption)
+                            .disabled(appState.isIndexing)
+                            .help("Rilegge da Music il numero di riproduzioni di ogni brano (l'ascolto non sempre aggiorna la sincronizzazione automatica)")
+                    }
+                    Button("Album mai riprodotti…") { showUnplayedReport = true }
+                        .font(.caption)
+                        .help("Elenca gli album le cui tracce non sono mai state (o quasi mai) riprodotte")
+                    Divider().frame(height: 14)
+                    if isExportingDiscography {
+                        ProgressView().scaleEffect(0.6)
+                    } else {
+                        Button("Genera discografia…") { exportDiscography() }
+                            .font(.caption)
+                            .help("Genera discografica.md: per ogni artista con album completi, l'elenco degli album ordinati per anno")
+                    }
                 }
                 Spacer()
             }
@@ -200,6 +240,67 @@ struct AlbumsView: View {
                                 onClose: { batchEditAlbums = nil },
                                 onApplied: { batchEditAlbums = nil; load() })
         }
+        .sheet(isPresented: $showUnplayedReport) {
+            UnplayedAlbumsReportView(appState: appState)
+        }
+    }
+
+    /// Rilegge da Music il conteggio riproduzioni di tutti i brani (Fase 21):
+    /// necessario perché l'ascolto non sempre aggiorna `modificationDate`, quindi
+    /// il sync incrementale può non accorgersi che un brano è stato riprodotto.
+    private func refreshPlayCounts() {
+        isRefreshingPlayCounts = true
+        Task {
+            _ = try? await appState.indexService.refreshPlayCounts()
+            await MainActor.run { isRefreshingPlayCounts = false }
+        }
+    }
+
+    /// Genera `discografica.md`: per ogni artista con almeno un album completo,
+    /// l'elenco dei suoi album completi ordinati per anno. Salva via NSSavePanel.
+    private func exportDiscography() {
+        isExportingDiscography = true
+        Task {
+            let artists = (try? await appState.albumService.discographyReport()) ?? []
+            await MainActor.run {
+                isExportingDiscography = false
+                guard !artists.isEmpty else {
+                    let alert = NSAlert()
+                    alert.messageText = "Nessun album completo"
+                    alert.informativeText = "Non ci sono album verificati completi da includere nella discografia."
+                    alert.runModal()
+                    return
+                }
+                let panel = NSSavePanel()
+                panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+                panel.nameFieldStringValue = "discografica.md"
+                panel.canCreateDirectories = true
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                do {
+                    try Self.buildDiscographyMarkdown(artists).data(using: .utf8)?.write(to: url)
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "Impossibile salvare il file"
+                    alert.informativeText = error.localizedDescription
+                    alert.runModal()
+                }
+            }
+        }
+    }
+
+    /// Un blocco per artista: nome come titolo, poi elenco puntato
+    /// `- (anno) Album`. Anno mancante reso come `(?)`.
+    private static func buildDiscographyMarkdown(_ artists: [AlbumService.DiscographyArtist]) -> String {
+        var out = "# Discografia\n\n"
+        for artist in artists {
+            out += "## \(artist.artist)\n\n"
+            for a in artist.albums {
+                let year = a.year.map { "\($0)" } ?? "?"
+                out += "- (\(year)) \(a.album)\n"
+            }
+            out += "\n"
+        }
+        return out
     }
 
     /// Filtra la vista sull'album indicato e lo seleziona (usato da "Passa a vista album").
@@ -1241,6 +1342,164 @@ private struct AlbumBatchEditSheet: View {
                     errorText = error.localizedDescription
                 }
             }
+        }
+    }
+}
+
+// ── Sheet report album mai/quasi mai riprodotti (Fase 22) ──────────────────────
+
+private struct UnplayedAlbumsReportView: View {
+    let appState: AppState
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var maxTotalPlays = 0
+    @State private var graceDays = 30
+    @State private var albums: [AlbumService.UnplayedAlbum] = []
+    @State private var isLoading = true
+
+    private var zeroPlay: [AlbumService.UnplayedAlbum] { albums.filter { $0.kind == .zero } }
+    private var partial: [AlbumService.UnplayedAlbum] { albums.filter { $0.kind == .partial } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Album mai riprodotti").font(.headline)
+                Spacer()
+                Button {
+                    exportMarkdown()
+                } label: {
+                    Label("Esporta Markdown…", systemImage: "square.and.arrow.up")
+                }
+                .disabled(albums.isEmpty)
+                Button("Chiudi") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+            Divider()
+
+            HStack(spacing: 16) {
+                Text("Play totali \u{2264}").foregroundStyle(.secondary)
+                stepperField(value: $maxTotalPlays, range: 0...50)
+                Divider().frame(height: 18)
+                Text("Escludi aggiunti negli ultimi").foregroundStyle(.secondary)
+                stepperField(value: $graceDays, range: 0...365)
+                Text("giorni").foregroundStyle(.secondary)
+                Spacer()
+                Text("\(albums.count) album").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .onChange(of: maxTotalPlays) { _, _ in load() }
+            .onChange(of: graceDays) { _, _ in load() }
+            Divider()
+
+            if isLoading {
+                Spacer(); ProgressView("Caricamento…"); Spacer()
+            } else if albums.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "checkmark.circle").font(.system(size: 30)).foregroundStyle(.secondary)
+                    Text("Nessun album trovato con questi criteri").foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    if !zeroPlay.isEmpty {
+                        Section("Mai riprodotti (\(zeroPlay.count))") {
+                            ForEach(zeroPlay) { row($0) }
+                        }
+                    }
+                    if !partial.isEmpty {
+                        Section("Parziali (\(partial.count))") {
+                            ForEach(partial) { row($0) }
+                        }
+                    }
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: true))
+            }
+        }
+        .frame(minWidth: 560, minHeight: 420)
+        .onAppear { load() }
+    }
+
+    private func row(_ a: AlbumService.UnplayedAlbum) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(a.album).lineLimit(1)
+                Text(a.albumArtist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if a.kind == .partial, !a.playedTrackNames.isEmpty {
+                    Text("Ascoltata: " + a.playedTrackNames.joined(separator: ", "))
+                        .font(.caption2).foregroundStyle(.orange).lineLimit(1)
+                }
+            }
+            Spacer()
+            Text("\(a.trackCount) tracce").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            Text("\(a.totalPlays) play")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(a.kind == .zero ? Color.secondary : Color.orange)
+                .frame(width: 56, alignment: .trailing)
+        }
+        .font(.system(size: 12))
+    }
+
+    private func stepperField(value: Binding<Int>, range: ClosedRange<Int>) -> some View {
+        HStack(spacing: 4) {
+            TextField("", value: value, format: .number)
+                .frame(width: 44)
+                .multilineTextAlignment(.trailing)
+                .textFieldStyle(.roundedBorder)
+            Stepper("", value: value, in: range, step: 1).labelsHidden()
+        }
+    }
+
+    private func load() {
+        isLoading = true
+        let maxPlays = maxTotalPlays, days = graceDays
+        Task {
+            let list = (try? await appState.albumService.unplayedAlbums(
+                maxTotalPlays: maxPlays, graceDays: days)) ?? []
+            await MainActor.run { albums = list; isLoading = false }
+        }
+    }
+
+    /// Un titolo `##` per sezione (Mai riprodotti / Parziali), poi un elenco
+    /// puntato `Artista — Album (N tracce · X play totali)`.
+    private static func buildMarkdown(zero: [AlbumService.UnplayedAlbum], partial: [AlbumService.UnplayedAlbum]) -> String {
+        func line(_ a: AlbumService.UnplayedAlbum) -> String {
+            var s = "- \(a.albumArtist) — \(a.album) (\(a.trackCount) tracce · \(a.totalPlays) play totali)"
+            if a.kind == .partial, !a.playedTrackNames.isEmpty {
+                s += " — ascoltata: " + a.playedTrackNames.joined(separator: ", ")
+            }
+            return s
+        }
+        var out = ""
+        if !zero.isEmpty {
+            out += "## Mai riprodotti\n\n"
+            for a in zero { out += line(a) + "\n" }
+            out += "\n"
+        }
+        if !partial.isEmpty {
+            out += "## Parziali\n\n"
+            for a in partial { out += line(a) + "\n" }
+            out += "\n"
+        }
+        return out
+    }
+
+    private func exportMarkdown() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = "album-mai-riprodotti.md"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let md = Self.buildMarkdown(zero: zeroPlay, partial: partial)
+        do {
+            try md.data(using: .utf8)?.write(to: url)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Impossibile salvare il file"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
         }
     }
 }
