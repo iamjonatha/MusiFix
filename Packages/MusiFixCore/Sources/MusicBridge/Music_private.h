@@ -7,7 +7,7 @@
 #import <AppKit/AppKit.h>
 #import <ScriptingBridge/ScriptingBridge.h>
 
-@class MusicApplication, MusicLibraryPlaylist, MusicUserPlaylist, MusicTrack, MusicArtwork, MusicSource;
+@class MusicApplication, MusicLibraryPlaylist, MusicUserPlaylist, MusicFolderPlaylist, MusicTrack, MusicArtwork, MusicSource;
 
 typedef NS_ENUM(NSUInteger, MusicESpK) {
     MusicESpKNone        = 'kNon',
@@ -127,6 +127,20 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 @end
 
 // ────────────────────────────────────────────────
+// MusicFolderPlaylist (cartelle contenitore di playlist utente)
+// ────────────────────────────────────────────────
+// Music.app NON restituisce le cartelle nella collezione `userPlaylists`
+// (equivalente ScriptingBridge di `user playlists`): vanno enumerate dalla
+// collezione dedicata `folderPlaylists` (`folder playlists` in AppleScript).
+@interface MusicFolderPlaylist : SBObject
+@property (copy, readonly) NSString *name;
+@property (copy, readonly) NSString *persistentID;
+/// Cartella contenitore, se la cartella è annidata in un'altra (nil/missing altrimenti).
+@property (copy, readonly) MusicFolderPlaylist *parent;
+- (id)get;
+@end
+
+// ────────────────────────────────────────────────
 // MusicSource
 // ────────────────────────────────────────────────
 @interface MusicSource : SBObject
@@ -146,5 +160,6 @@ typedef NS_ENUM(NSUInteger, MusicESrc) {
 - (SBElementArray<MusicTrack *> *)tracks;
 - (SBElementArray<MusicLibraryPlaylist *> *)libraryPlaylists;
 - (SBElementArray<MusicUserPlaylist *> *)userPlaylists;
+- (SBElementArray<MusicFolderPlaylist *> *)folderPlaylists;
 - (void)reveal:(SBObject *)item;
 @end

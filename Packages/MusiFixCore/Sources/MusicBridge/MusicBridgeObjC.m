@@ -336,12 +336,51 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
 
 - (nullable NSArray<NSDictionary *> *)userPlaylistTree:(NSError **)error {
     @try {
+        NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
+        NSMutableSet<NSString *> *seenIDs = [NSMutableSet set];
+
+        // Le cartelle NON compaiono nella collezione `userPlaylists`: vanno enumerate
+        // dalla collezione dedicata `folderPlaylists`, altrimenti l'albero le perde
+        // e le playlist al loro interno restano orfane (parentID senza nodo cartella).
+        // L'intera enumerazione cartelle è isolata: se `folderPlaylists` non è
+        // supportata/lancia, si prosegue comunque con le playlist normali (nessun
+        // return nil, altrimenti il menu tornerebbe completamente vuoto).
+        @try {
+            SBElementArray<MusicFolderPlaylist *> *folders = [_app folderPlaylists];
+            for (MusicFolderPlaylist *fp in folders) {
+                @try {
+                    NSString *pid = fp.persistentID ?: @"";
+                    if (pid.length == 0 || [seenIDs containsObject:pid]) continue;
+                    NSString *parentID = nil;
+                    @try {
+                        MusicFolderPlaylist *parent = fp.parent;
+                        if (parent) parentID = parent.persistentID;
+                    } @catch (NSException *pe) { parentID = nil; }
+                    [seenIDs addObject:pid];
+                    [result addObject:@{
+                        @"id": pid,
+                        @"name": fp.name ?: @"",
+                        @"isFolder": @YES,
+                        @"parentID": parentID ?: (id)[NSNull null],
+                    }];
+                } @catch (NSException *inner) {
+                    NSLog(@"[MusicBridge] cartella saltata (tree): %@", inner.reason ?: @"?");
+                }
+            }
+        } @catch (NSException *fex) {
+            NSLog(@"[MusicBridge] enumerazione cartelle non riuscita: %@", fex.reason ?: @"?");
+        }
+
         SBElementArray<MusicUserPlaylist *> *playlists = [_app userPlaylists];
         if (!playlists) {
             if (error) *error = bridgeError(11, @"Impossibile ottenere le playlist utente");
             return nil;
         }
-        NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
+        // Cartelle sintetizzate dai riferimenti `parent` dei figli, raccolte qui e
+        // aggiunte in coda: garantiscono che una cartella contenente playlist appaia
+        // sempre nell'albero — con lo stesso ID che i figli riportano come parent —
+        // anche se `folderPlaylists` sopra non fosse disponibile.
+        NSMutableDictionary<NSString *, NSString *> *derivedFolders = [NSMutableDictionary dictionary];
         for (MusicUserPlaylist *pl in playlists) {
             @try {
                 MusicESpK kind = pl.specialKind;
@@ -352,13 +391,23 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
                     if (kind != MusicESpKNone) continue;
                 }
                 NSString *pid = pl.persistentID ?: @"";
-                if (pid.length == 0) continue;
+                if (pid.length == 0 || [seenIDs containsObject:pid]) continue;
                 // parent: può lanciare / essere missing value se al livello radice.
                 NSString *parentID = nil;
                 @try {
                     MusicUserPlaylist *parent = pl.parent;
-                    if (parent) parentID = parent.persistentID;
+                    if (parent) {
+                        parentID = parent.persistentID;
+                        // Se la cartella-genitore non è già nota, sintetizzala dal parent.
+                        if (parentID.length > 0 && ![seenIDs containsObject:parentID]
+                            && derivedFolders[parentID] == nil) {
+                            NSString *parentName = @"";
+                            @try { parentName = parent.name ?: @""; } @catch (NSException *ne) {}
+                            derivedFolders[parentID] = parentName;
+                        }
+                    }
                 } @catch (NSException *pe) { parentID = nil; }
+                [seenIDs addObject:pid];
                 [result addObject:@{
                     @"id": pid,
                     @"name": pl.name ?: @"",
@@ -368,6 +417,17 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
             } @catch (NSException *inner) {
                 NSLog(@"[MusicBridge] playlist saltata (tree): %@", inner.reason ?: @"?");
             }
+        }
+        // Aggiunge le cartelle derivate non già presenti (parent sconosciuto = radice).
+        for (NSString *fid in derivedFolders) {
+            if ([seenIDs containsObject:fid]) continue;
+            [seenIDs addObject:fid];
+            [result addObject:@{
+                @"id": fid,
+                @"name": derivedFolders[fid],
+                @"isFolder": @YES,
+                @"parentID": (id)[NSNull null],
+            }];
         }
         return [result copy];
     } @catch (NSException *ex) {
@@ -411,6 +471,45 @@ static NSDictionary *trackToDictionary(MusicTrack *t) {
         return @{@"added": @(added), @"skipped": @(skipped), @"failed": @(failed)};
     } @catch (NSException *ex) {
         if (error) *error = bridgeError(15, ex.reason ?: @"Eccezione aggiunta a playlist");
+        return nil;
+    }
+}
+
+- (nullable NSDictionary *)removeTracksWithPersistentIDs:(NSArray<NSString *> *)pids
+                             fromPlaylistWithPersistentID:(NSString *)playlistID
+                                                    error:(NSError **)error {
+    @try {
+        MusicUserPlaylist *pl = [self userPlaylistWithPersistentID:playlistID];
+        if (!pl) {
+            if (error) *error = bridgeError(16, @"Playlist non trovata");
+            return nil;
+        }
+        if (pl.smart || pl.specialKind != MusicESpKNone) {
+            if (error) *error = bridgeError(17, @"Impossibile rimuovere brani da questa playlist");
+            return nil;
+        }
+        NSSet *target = [NSSet setWithArray:(pids ?: @[])];
+        NSInteger removed = 0, failed = 0;
+        // Itera i brani DELLA playlist: [t delete] su un membro rimuove dalla playlist,
+        // non dalla libreria. Copia l'array perché la cancellazione muta la collezione.
+        NSArray *members = [[pl tracks] copy];
+        for (MusicTrack *t in members) {
+            NSString *pid = nil;
+            @try { pid = [t persistentID]; } @catch (NSException *pe) { continue; }
+            if (![pid isKindOfClass:[NSString class]] || ![target containsObject:pid]) continue;
+            @try {
+                [t delete];
+                removed++;
+            } @catch (NSException *de) {
+                NSLog(@"[MusicBridge] rimozione da playlist fallita per %@: %@", pid, de.reason ?: @"?");
+                failed++;
+            }
+        }
+        NSInteger missing = (NSInteger)target.count - removed - failed;
+        if (missing < 0) missing = 0;
+        return @{@"removed": @(removed), @"missing": @(missing), @"failed": @(failed)};
+    } @catch (NSException *ex) {
+        if (error) *error = bridgeError(18, ex.reason ?: @"Eccezione rimozione da playlist");
         return nil;
     }
 }

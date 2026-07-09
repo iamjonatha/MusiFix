@@ -17,6 +17,31 @@ public enum Migrations {
         migrator.registerMigration("v10_playlist_membership", migrate: v10_playlist_membership)
         migrator.registerMigration("v11_playlist_tables", migrate: v11_playlist_tables)
         migrator.registerMigration("v12_played_count", migrate: v12_played_count)
+        migrator.registerMigration("v13_playlist_annotation", migrate: v13_playlist_annotation)
+        migrator.registerMigration("v14_playlist_track_position", migrate: v14_playlist_track_position)
+    }
+
+    // ── v14: posizione del brano nella playlist ───────────────────────────────
+    // `playlist_track` non conservava l'ordine reale della playlist (venivano
+    // mostrati ordinati per album/traccia). Aggiunge `position` (indice 0-based
+    // nell'ordine restituito da Music.app), popolata da IndexService.scanPlaylistFull.
+    private static func v14_playlist_track_position(_ db: Database) throws {
+        try db.alter(table: "playlist_track") { t in
+            t.add(column: "position", .integer).notNull().defaults(to: 0)
+        }
+    }
+
+    // ── v13: annotazioni utente playlist (descrizione + obiettivo) ────────────
+    // Tabella separata da `playlist`: quest'ultima viene DELETE+reinserita a ogni
+    // scansione (PlaylistDAO.replaceAll), quindi tenere qui i dati inseriti
+    // dall'utente ne garantisce la persistenza tra le scansioni.
+    private static func v13_playlist_annotation(_ db: Database) throws {
+        try db.create(table: "playlist_annotation") { t in
+            t.primaryKey("playlistID", .text)     // = playlist.id (persistentID Music)
+            t.column("playlistDescription", .text).notNull().defaults(to: "")
+            t.column("desiredResult", .text).notNull().defaults(to: "")
+            t.column("updatedAt", .datetime).notNull()
+        }
     }
 
     // ── v12: conteggio/data riproduzioni (Fase 21) ────────────────────────────

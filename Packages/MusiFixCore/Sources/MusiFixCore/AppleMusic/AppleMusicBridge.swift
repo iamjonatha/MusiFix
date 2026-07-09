@@ -36,6 +36,9 @@ public protocol AppleMusicBridge: Sendable {
     /// Aggiunge i brani (per persistentID) alla playlist indicata, saltando i duplicati.
     func addTracks(_ pids: [String], toPlaylistID playlistID: String) async throws -> PlaylistAddResult
 
+    /// Rimuove i brani (per persistentID) dalla playlist indicata, senza eliminarli dalla libreria.
+    func removeTracks(_ pids: [String], fromPlaylistID playlistID: String) async throws -> PlaylistRemoveResult
+
     /// Garantisce l'esistenza di una playlist (dato nome), eventualmente dentro una
     /// cartella (creata se assente). Ritorna il persistentID della playlist.
     func ensurePlaylist(named name: String, inFolder folder: String?) async throws -> String
@@ -81,6 +84,17 @@ public struct PlaylistAddResult: Sendable {
     }
 }
 
+/// Esito di una rimozione di brani da playlist.
+public struct PlaylistRemoveResult: Sendable {
+    public let removed: Int    // brani effettivamente rimossi dalla playlist
+    public let missing: Int    // non presenti nella playlist
+    public let failed: Int     // errore in rimozione
+
+    public init(removed: Int, missing: Int, failed: Int) {
+        self.removed = removed; self.missing = missing; self.failed = failed
+    }
+}
+
 // Default: le implementazioni che non supportano le playlist (es. AppleScript) sollevano.
 public extension AppleMusicBridge {
     func userPlaylistTree() async throws -> [MusicPlaylistNode] {
@@ -88,6 +102,9 @@ public extension AppleMusicBridge {
     }
     func addTracks(_ pids: [String], toPlaylistID playlistID: String) async throws -> PlaylistAddResult {
         throw MusiFixError.appleScriptError("Aggiunta a playlist non supportata da questo bridge")
+    }
+    func removeTracks(_ pids: [String], fromPlaylistID playlistID: String) async throws -> PlaylistRemoveResult {
+        throw MusiFixError.appleScriptError("Rimozione da playlist non supportata da questo bridge")
     }
     func ensurePlaylist(named name: String, inFolder folder: String?) async throws -> String {
         throw MusiFixError.appleScriptError("Creazione playlist non supportata da questo bridge")

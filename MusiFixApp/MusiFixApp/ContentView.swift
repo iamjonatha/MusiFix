@@ -509,10 +509,13 @@ struct ContentView: View {
             reloadScanStatus()
         }
         .onChange(of: appState.isIndexing) { _, indexing in
-            // A fine scansione (playlist/copertine) ricarica le set di evidenziazione.
+            // A fine scansione (playlist/copertine) ricarica le set di evidenziazione
+            // e l'albero playlist, altrimenti "Aggiungi a playlist" resta vuoto/stale
+            // finché l'app non viene riavviata.
             if !indexing {
                 reloadHighlightSets()
                 reloadScanStatus()
+                reloadPlaylists()
             }
         }
         .sheet(isPresented: $showBatchEditor) {

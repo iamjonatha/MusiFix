@@ -33,7 +33,11 @@ public actor PlaylistAnalysisService {
     /// cioè l'ordine del browser, non necessariamente quello di Music.app — vedi
     /// nota "Anomalie" in evolutive.md sull'ordine playlist).
     public func analyze(playlistID: String, playlistName: String, goal: PlaylistGoal) async throws -> PlaylistAnalysis {
-        let tracks = try db.read { db in try PlaylistDAO.tracksInPlaylist(id: playlistID, in: db) }
+        let (tracks, annotation) = try db.read { db -> ([DBTrack], DBPlaylistAnnotation?) in
+            let ts = try PlaylistDAO.tracksInPlaylist(id: playlistID, in: db)
+            let ann = try PlaylistDAO.annotation(playlistID: playlistID, in: db)
+            return (ts, ann)
+        }
         let features = extractor.extract(from: tracks)
         let scores = scorer.score(features)
 
@@ -42,8 +46,12 @@ public actor PlaylistAnalysisService {
         var reason: String?
         if await intelligence.isAvailable {
             do {
-                narrative = try await intelligence.narrate(
-                    playlistName: playlistName, features: features, scores: scores, goal: goal)
+                let input = PlaylistNarrationInput(
+                    playlistName: playlistName, features: features, scores: scores, goal: goal,
+                    userDescription: annotation?.playlistDescription ?? "",
+                    desiredResult: annotation?.desiredResult ?? "",
+                    trackSample: Self.trackSample(tracks))
+                narrative = try await intelligence.narrate(input)
             } catch {
                 reason = error.localizedDescription
             }
@@ -52,6 +60,15 @@ public actor PlaylistAnalysisService {
         }
         return PlaylistAnalysis(
             features: features, scores: scores, narrative: narrative, intelligenceUnavailableReason: reason)
+    }
+
+    /// Campione dei brani ("Titolo — Artista") nell'ordine attuale, cap a 60 righe
+    /// per non sforare il contesto ridotto del modello on-device.
+    private static func trackSample(_ tracks: [DBTrack]) -> [String] {
+        tracks.prefix(60).map { t in
+            let name = t.name.isEmpty ? "(senza titolo)" : t.name
+            return t.artist.isEmpty ? name : "\(name) — \(t.artist)"
+        }
     }
 
     private static func makeIntelligence() -> any PlaylistIntelligence {

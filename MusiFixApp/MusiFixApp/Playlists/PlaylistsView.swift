@@ -21,6 +21,8 @@ struct PlaylistsView: View {
     @State private var scanDone = true
     @State private var showDurationReport = false
     @State private var showAnalysis = false
+    @State private var showAdvancedAnalysis = false
+    @State private var showReorganize = false
 
     /// Playlist effettivamente coinvolte dalla selezione: le cartelle selezionate
     /// vengono espanse nelle loro figlie; risultato de-duplicato e ordinato.
@@ -63,6 +65,17 @@ struct PlaylistsView: View {
             if let pl = singlePlaylist {
                 PlaylistAnalysisSheet(appState: appState, playlistID: pl.id, playlistName: pl.name)
             }
+        }
+        .sheet(isPresented: $showAdvancedAnalysis) {
+            if let pl = singlePlaylist {
+                AdvancedAnalysisSheet(
+                    appState: appState, playlistID: pl.id, playlistName: pl.name, currentTracks: tracks)
+            }
+        }
+        .sheet(isPresented: $showReorganize) {
+            ReorganizeSheet(
+                appState: appState,
+                playlists: effectivePlaylists.map { PlaylistRef(id: $0.id, name: $0.name) })
         }
     }
 
@@ -157,6 +170,14 @@ struct PlaylistsView: View {
                 Label("Esporta Markdown…", systemImage: "square.and.arrow.up")
             }
             .help("Salva un file .md con le playlist selezionate e i brani contenuti")
+            if singlePlaylist == nil && effectivePlaylists.count >= 2 {
+                Button {
+                    showReorganize = true
+                } label: {
+                    Label("Riorganizza (AI)…", systemImage: "arrow.left.arrow.right")
+                }
+                .help("Sposta brani tra le playlist selezionate secondo un criterio logico, tramite AI cloud")
+            }
             if let pl = singlePlaylist {
                 Button {
                     onCopyFiles(tracks.map(\.persistentID), pl.name)
@@ -172,6 +193,13 @@ struct PlaylistsView: View {
                 }
                 .disabled(tracks.isEmpty)
                 .help("Analizza sequenza, artisti e generi della playlist (metadati + euristiche, Apple Intelligence se disponibile)")
+                Button {
+                    showAdvancedAnalysis = true
+                } label: {
+                    Label("Analisi avanzata (AI)…", systemImage: "wand.and.stars")
+                }
+                .disabled(tracks.isEmpty)
+                .help("Suggerisce integrazioni dalla libreria e un ordinamento tramite AI cloud (Claude/OpenAI)")
             }
         }
         .padding(10)
@@ -466,6 +494,9 @@ private struct PlaylistAnalysisSheet: View {
     @State private var analysis: PlaylistAnalysis?
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var descriptionText = ""
+    @State private var desiredResultText = ""
+    @State private var annotationLoaded = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -502,6 +533,8 @@ private struct PlaylistAnalysisSheet: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .onChange(of: goal) { _, _ in if analysis != nil { runAnalysis() } }
+
+            annotationEditor
             Divider()
 
             if let err = errorMessage {
@@ -517,8 +550,28 @@ private struct PlaylistAnalysisSheet: View {
                 Spacer()
             }
         }
-        .frame(width: 560, height: 560)
-        .onAppear { runAnalysis() }
+        .frame(width: 560, height: 620)
+        .onAppear { loadAnnotation(); runAnalysis() }
+    }
+
+    /// Editor della descrizione e del risultato desiderato, persistiti per playlist
+    /// e usati per guidare il verdetto dell'analisi.
+    private var annotationEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Descrizione").font(.caption).foregroundStyle(.secondary)
+                    TextField("A cosa serve questa playlist…", text: $descriptionText, axis: .vertical)
+                        .textFieldStyle(.roundedBorder).lineLimit(1...3)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Risultato desiderato").font(.caption).foregroundStyle(.secondary)
+                    TextField("Com'è la playlist ideale…", text: $desiredResultText, axis: .vertical)
+                        .textFieldStyle(.roundedBorder).lineLimit(1...3)
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.bottom, 8)
     }
 
     @ViewBuilder
@@ -575,7 +628,8 @@ private struct PlaylistAnalysisSheet: View {
 
     private func artistsSection(_ f: PlaylistFeatures) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Artisti").font(.caption.bold()).foregroundStyle(.secondary)
+            Text("Artisti (\(f.distinctArtistCount) distinti, inclusi featuring)")
+                .font(.caption.bold()).foregroundStyle(.secondary)
             if f.maxConsecutiveRepeats > 1 {
                 Text("Fino a \(f.maxConsecutiveRepeats) brani consecutivi dello stesso artista.")
                     .font(.caption2).foregroundStyle(.orange)
@@ -620,7 +674,27 @@ private struct PlaylistAnalysisSheet: View {
         }
     }
 
+    /// Carica l'annotazione salvata (descrizione + risultato desiderato) una sola volta.
+    private func loadAnnotation() {
+        guard !annotationLoaded else { return }
+        annotationLoaded = true
+        if let ann = try? appState.db.read({ try PlaylistDAO.annotation(playlistID: playlistID, in: $0) }) {
+            descriptionText = ann.playlistDescription
+            desiredResultText = ann.desiredResult
+        }
+    }
+
+    /// Persiste descrizione e risultato desiderato prima di ogni analisi.
+    private func saveAnnotation() {
+        let pid = playlistID, desc = descriptionText, desired = desiredResultText
+        try? appState.db.write { db in
+            try PlaylistDAO.upsertAnnotation(
+                playlistID: pid, description: desc, desiredResult: desired, in: db)
+        }
+    }
+
     private func runAnalysis() {
+        saveAnnotation()
         isLoading = true; errorMessage = nil
         let pid = playlistID, name = playlistName, g = goal
         Task {
@@ -668,5 +742,500 @@ private struct PlaylistAnalysisSheet: View {
         out += "\n### Generi\n\n"
         for stat in a.features.genreDistribution.prefix(5) { out += "- \(stat.name): \(stat.count) (\(Int(stat.percentage))%)\n" }
         return out
+    }
+}
+
+// MARK: - Analisi avanzata (AI cloud)
+
+/// Sheet di analisi avanzata (Fase 2 evolutiva): usa un LLM cloud per suggerire
+/// integrazioni dalla libreria (confermate una a una prima dell'aggiunta a Music)
+/// e, sull'insieme finale, un ordinamento mostrato solo a video.
+private struct AdvancedAnalysisSheet: View {
+    let appState: AppState
+    let playlistID: String
+    let playlistName: String
+    let currentTracks: [DBTrack]
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var configured: Bool?
+    @State private var showConfig = false
+
+    @State private var loadingAdditions = false
+    @State private var verdict: String?
+    @State private var additions: [SuggestedAddition] = []
+    @State private var addedIDs: Set<String> = []
+    @State private var addedTracks: [DBTrack] = []
+    @State private var addingID: String?
+
+    @State private var loadingOrder = false
+    @State private var order: OrderSuggestion?
+
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+        }
+        .frame(width: 620, height: 680)
+        .onAppear { refreshConfigured() }
+        .sheet(isPresented: $showConfig, onDismiss: { refreshConfigured() }) {
+            LLMConfigSheet()
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Analisi avanzata (AI)").font(.headline)
+                Text(playlistName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Button {
+                showConfig = true
+            } label: { Label("Configura AI…", systemImage: "gearshape") }
+            Button("Chiudi") { dismiss() }.keyboardShortcut(.cancelAction)
+        }
+        .padding(12)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch configured {
+        case .none:
+            Spacer(); ProgressView(); Spacer()
+        case .some(false):
+            notConfiguredState
+        case .some(true):
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let err = errorMessage {
+                        Label(err, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.red).font(.caption)
+                    }
+                    additionsSection
+                    if !addedTracks.isEmpty || !additions.isEmpty { Divider() }
+                    orderSection
+                }
+                .padding(16)
+            }
+        }
+    }
+
+    private var notConfiguredState: some View {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(systemName: "wand.and.stars").font(.system(size: 30)).foregroundStyle(.secondary)
+            Text("Nessun provider AI configurato.").foregroundStyle(.secondary)
+            Text("Imposta provider (Claude o OpenAI), modello e chiave API.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Configura AI…") { showConfig = true }.buttonStyle(.borderedProminent)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // ── Integrazioni ─────────────────────────────────────────────────────────
+
+    private var additionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Integrazioni suggerite", systemImage: "plus.circle").font(.headline)
+                Spacer()
+                if loadingAdditions { ProgressView().scaleEffect(0.6) }
+                Button(verdict == nil ? "Suggerisci integrazioni" : "Rigenera") { runAdditions() }
+                    .disabled(loadingAdditions)
+                    .buttonStyle(.borderedProminent)
+            }
+            if let verdict, !verdict.isEmpty {
+                Text(verdict).font(.system(size: 12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if verdict != nil && additions.isEmpty && !loadingAdditions {
+                Text("Nessuna integrazione proposta.").font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(additions) { item in additionRow(item) }
+        }
+    }
+
+    private func additionRow(_ item: SuggestedAddition) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.track.name.isEmpty ? "(senza titolo)" : item.track.name)
+                    .font(.system(size: 12, weight: .medium)).lineLimit(1)
+                Text(item.track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if !item.reason.isEmpty {
+                    Text(item.reason).font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer()
+            if addedIDs.contains(item.id) {
+                Label("Aggiunto", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green).font(.caption)
+            } else if addingID == item.id {
+                ProgressView().scaleEffect(0.6)
+            } else {
+                Button("Aggiungi") { addOne(item) }.controlSize(.small)
+            }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    // ── Ordine ───────────────────────────────────────────────────────────────
+
+    private var orderSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Ordinamento suggerito", systemImage: "list.number").font(.headline)
+                Spacer()
+                if loadingOrder { ProgressView().scaleEffect(0.6) }
+                Button(order == nil ? "Suggerisci ordine" : "Ricalcola ordine") { runOrder() }
+                    .disabled(loadingOrder)
+            }
+            Text("Calcolato sull'insieme finale (brani attuali + integrazioni confermate). Solo a video.")
+                .font(.caption2).foregroundStyle(.secondary)
+            if let order {
+                if !order.rationale.isEmpty {
+                    Text(order.rationale).font(.system(size: 12)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(Array(order.orderedTracks.enumerated()), id: \.offset) { idx, t in
+                    HStack(spacing: 8) {
+                        Text("\(idx + 1).").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            .frame(width: 28, alignment: .trailing)
+                        Text(t.name.isEmpty ? "(senza titolo)" : t.name).font(.system(size: 12)).lineLimit(1)
+                        Text(t.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Spacer()
+                        if addedIDs.contains(t.persistentID) {
+                            Image(systemName: "plus.circle.fill").foregroundStyle(.green).font(.caption2)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Azioni ───────────────────────────────────────────────────────────────
+
+    private func refreshConfigured() {
+        Task {
+            let ok = await appState.advancedPlaylistAnalysisService.isConfigured
+            await MainActor.run { configured = ok }
+        }
+    }
+
+    private func runAdditions() {
+        loadingAdditions = true; errorMessage = nil
+        let pid = playlistID, name = playlistName
+        Task {
+            do {
+                let result = try await appState.advancedPlaylistAnalysisService
+                    .suggestAdditions(playlistID: pid, playlistName: name)
+                await MainActor.run {
+                    verdict = result.verdict
+                    additions = result.additions
+                    loadingAdditions = false
+                }
+            } catch {
+                await MainActor.run { errorMessage = error.localizedDescription; loadingAdditions = false }
+            }
+        }
+    }
+
+    private func addOne(_ item: SuggestedAddition) {
+        addingID = item.id; errorMessage = nil
+        let pid = playlistID, track = item.track
+        Task {
+            do {
+                _ = try await appState.bridge.addTracks([track.persistentID], toPlaylistID: pid)
+                await MainActor.run {
+                    addedIDs.insert(track.persistentID)
+                    addedTracks.append(track)
+                    addingID = nil
+                }
+            } catch {
+                await MainActor.run { errorMessage = error.localizedDescription; addingID = nil }
+            }
+        }
+    }
+
+    private func runOrder() {
+        loadingOrder = true; errorMessage = nil
+        // Insieme finale: brani attuali + integrazioni confermate (dedup per persistentID).
+        var seen = Set(currentTracks.map(\.persistentID))
+        var finalTracks = currentTracks
+        for t in addedTracks where !seen.contains(t.persistentID) {
+            seen.insert(t.persistentID); finalTracks.append(t)
+        }
+        let pid = playlistID, name = playlistName, tracks = finalTracks
+        Task {
+            do {
+                let result = try await appState.advancedPlaylistAnalysisService
+                    .suggestOrder(playlistID: pid, playlistName: name, finalTracks: tracks)
+                await MainActor.run { order = result; loadingOrder = false }
+            } catch {
+                await MainActor.run { errorMessage = error.localizedDescription; loadingOrder = false }
+            }
+        }
+    }
+}
+
+/// Configurazione del provider AI cloud: provider, modello, endpoint (opzionale)
+/// e chiave API (salvata nel Keychain).
+private struct LLMConfigSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var provider: LLMProvider = LLMConfigStore.provider
+    @State private var model = ""
+    @State private var endpoint = ""
+    @State private var apiKey = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Configura AI").font(.headline)
+                Spacer()
+                Button("Chiudi") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+            Divider()
+
+            Form {
+                Picker("Provider", selection: $provider) {
+                    ForEach(LLMProvider.allCases) { p in Text(p.label).tag(p) }
+                }
+                .onChange(of: provider) { _, newValue in loadForProvider(newValue) }
+
+                TextField("Modello", text: $model, prompt: Text(provider.defaultModel))
+                SecureField("Chiave API", text: $apiKey)
+                TextField("Endpoint (opzionale)", text: $endpoint, prompt: Text(provider.defaultEndpoint))
+                    .font(.system(size: 11, design: .monospaced))
+            }
+            .padding(12)
+
+            Text("La chiave API viene salvata nel Keychain di macOS. I metadati dei brani (titoli, artisti, generi) vengono inviati al provider selezionato durante l'analisi.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+
+            Spacer()
+            HStack {
+                Spacer()
+                Button("Salva") { save() }.buttonStyle(.borderedProminent)
+                    .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(12)
+        }
+        .frame(width: 460, height: 360)
+        .onAppear { loadForProvider(provider) }
+    }
+
+    private func loadForProvider(_ p: LLMProvider) {
+        apiKey = LLMConfigStore.apiKey(for: p)
+        // Modello/endpoint sono condivisi: se vuoti mostrano il default via prompt.
+        if model.isEmpty { model = LLMConfigStore.model }
+        if endpoint.isEmpty { endpoint = LLMConfigStore.endpoint }
+    }
+
+    private func save() {
+        LLMConfigStore.provider = provider
+        LLMConfigStore.model = model.trimmingCharacters(in: .whitespaces)
+        LLMConfigStore.endpoint = endpoint.trimmingCharacters(in: .whitespaces)
+        LLMConfigStore.setAPIKey(apiKey.trimmingCharacters(in: .whitespaces), for: provider)
+        dismiss()
+    }
+}
+
+// MARK: - Riorganizzazione multi-playlist (AI cloud)
+
+/// Sheet di riorganizzazione (punto 6): dato un criterio logico, l'AI propone di
+/// spostare brani tra le playlist selezionate. Ogni spostamento è confermato uno a
+/// uno (aggiunta su destinazione + rimozione da origine, via bridge Music.app).
+private struct ReorganizeSheet: View {
+    let appState: AppState
+    let playlists: [PlaylistRef]
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var configured: Bool?
+    @State private var showConfig = false
+    @State private var criterion = ""
+    @State private var loading = false
+    @State private var summary: String?
+    @State private var moves: [SuggestedMove] = []
+    @State private var appliedIDs: Set<String> = []
+    @State private var applyingID: String?
+    @State private var errorMessage: String?
+    /// Se true lo spostamento rimuove il brano dall'origine; se false lo copia soltanto.
+    @State private var removeFromSource = true
+    @State private var pendingMove: SuggestedMove?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Riorganizza playlist (AI)").font(.headline)
+                    Text("\(playlists.count) playlist selezionate")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { showConfig = true } label: { Label("Configura AI…", systemImage: "gearshape") }
+                Button("Chiudi") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+            Divider()
+            content
+        }
+        .frame(width: 640, height: 700)
+        .onAppear { refreshConfigured() }
+        .sheet(isPresented: $showConfig, onDismiss: { refreshConfigured() }) { LLMConfigSheet() }
+        .alert("Confermi l'operazione?",
+               isPresented: Binding(get: { pendingMove != nil },
+                                    set: { if !$0 { pendingMove = nil } }),
+               presenting: pendingMove) { m in
+            Button(removeFromSource ? "Sposta" : "Copia", role: .destructive) {
+                apply(m); pendingMove = nil
+            }
+            Button("Annulla", role: .cancel) { pendingMove = nil }
+        } message: { m in
+            let title = m.track.name.isEmpty ? "(senza titolo)" : m.track.name
+            Text(removeFromSource
+                 ? "«\(title)» verrà aggiunto a «\(m.toName)» e rimosso da «\(m.fromName)»."
+                 : "«\(title)» verrà aggiunto a «\(m.toName)» e resterà anche in «\(m.fromName)».")
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch configured {
+        case .none:
+            Spacer(); ProgressView(); Spacer()
+        case .some(false):
+            VStack(spacing: 10) {
+                Spacer()
+                Image(systemName: "wand.and.stars").font(.system(size: 30)).foregroundStyle(.secondary)
+                Text("Nessun provider AI configurato.").foregroundStyle(.secondary)
+                Button("Configura AI…") { showConfig = true }.buttonStyle(.borderedProminent)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .some(true):
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Criterio logico di composizione").font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        TextField("Es. separa per decennio, o raggruppa i brani energici…",
+                                  text: $criterion, axis: .vertical)
+                            .textFieldStyle(.roundedBorder).lineLimit(1...3)
+                        if loading { ProgressView().scaleEffect(0.6) }
+                        Button(summary == nil ? "Analizza" : "Rigenera") { run() }
+                            .disabled(loading || criterion.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .buttonStyle(.borderedProminent)
+                    }
+                    Toggle("Rimuovi dalla playlist di origine (sposta invece di copiare)",
+                           isOn: $removeFromSource)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(12)
+                Divider()
+                resultsList
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var resultsList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                if let err = errorMessage {
+                    Label(err, systemImage: "exclamationmark.triangle").foregroundStyle(.red).font(.caption)
+                }
+                if let summary, !summary.isEmpty {
+                    Text(summary).font(.system(size: 12)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if summary != nil && moves.isEmpty && !loading {
+                    Text("Nessuno spostamento proposto.").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(moves) { moveRow($0) }
+            }
+            .padding(16)
+        }
+    }
+
+    private func moveRow(_ m: SuggestedMove) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(m.track.name.isEmpty ? "(senza titolo)" : m.track.name)
+                    .font(.system(size: 12, weight: .medium)).lineLimit(1)
+                Text(m.track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(m.fromName).foregroundStyle(.secondary)
+                    Image(systemName: "arrow.right").font(.system(size: 9))
+                    Text(m.toName).foregroundStyle(.blue)
+                }
+                .font(.caption2)
+                if !m.reason.isEmpty {
+                    Text(m.reason).font(.caption2).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer()
+            if appliedIDs.contains(m.id) {
+                Label("Fatto", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green).font(.caption)
+            } else if applyingID == m.id {
+                ProgressView().scaleEffect(0.6)
+            } else {
+                Button(removeFromSource ? "Sposta" : "Copia") { pendingMove = m }.controlSize(.small)
+            }
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    // ── Azioni ───────────────────────────────────────────────────────────────
+
+    private func refreshConfigured() {
+        Task {
+            let ok = await appState.advancedPlaylistAnalysisService.isConfigured
+            await MainActor.run { configured = ok }
+        }
+    }
+
+    private func run() {
+        loading = true; errorMessage = nil; summary = nil; moves = []
+        let pls = playlists, crit = criterion
+        Task {
+            do {
+                let result = try await appState.advancedPlaylistAnalysisService
+                    .suggestReorganization(playlists: pls, criterion: crit)
+                await MainActor.run { summary = result.summary; moves = result.moves; loading = false }
+            } catch {
+                await MainActor.run { errorMessage = error.localizedDescription; loading = false }
+            }
+        }
+    }
+
+    /// Applica l'operazione: aggiunge alla destinazione e, se richiesto, rimuove
+    /// dall'origine. L'aggiunta precede la rimozione così il brano non sparisce mai
+    /// se l'aggiunta fallisse.
+    private func apply(_ m: SuggestedMove) {
+        applyingID = m.id; errorMessage = nil
+        let pid = m.track.persistentID, fromID = m.fromID, toID = m.toID
+        let remove = removeFromSource
+        Task {
+            do {
+                _ = try await appState.bridge.addTracks([pid], toPlaylistID: toID)
+                if remove {
+                    _ = try await appState.bridge.removeTracks([pid], fromPlaylistID: fromID)
+                }
+                await MainActor.run { appliedIDs.insert(m.id); applyingID = nil }
+            } catch {
+                await MainActor.run { errorMessage = error.localizedDescription; applyingID = nil }
+            }
+        }
     }
 }

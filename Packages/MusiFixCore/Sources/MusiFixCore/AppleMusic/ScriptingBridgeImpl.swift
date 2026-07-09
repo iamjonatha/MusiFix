@@ -53,11 +53,22 @@ public final class ScriptingBridgeImpl: AppleMusicBridge, @unchecked Sendable {
     }
 
     public func setArtwork(_ data: Data, persistentID: String) async throws {
-        try await serializer.setArtworkData(data, pid: persistentID)
+        do {
+            try await serializer.setArtworkData(data, pid: persistentID)
+        } catch {
+            // Come trackMetadata: su brani cloud/matched ScriptingBridge può fallire
+            // silenziosamente nella scrittura dell'artwork; fallback via AppleScript.
+            try await NSAppleScriptImpl().setArtwork(data, persistentID: persistentID)
+        }
     }
 
     public func artwork(persistentID: String) async throws -> Data? {
-        return try await serializer.artworkData(pid: persistentID)
+        if let data = try? await serializer.artworkData(pid: persistentID) {
+            return data
+        }
+        // ScriptingBridge può restituire nil su brani cloud/matched pur essendoci
+        // una copertina valida (vedi MusicBridgeObjC.m); fallback via AppleScript.
+        return try await NSAppleScriptImpl().artwork(persistentID: persistentID)
     }
 
     public func deleteTrack(persistentID: String) async throws {
@@ -95,6 +106,16 @@ public final class ScriptingBridgeImpl: AppleMusicBridge, @unchecked Sendable {
         return PlaylistAddResult(
             added: (dict["added"] as? Int) ?? 0,
             skipped: (dict["skipped"] as? Int) ?? 0,
+            failed: (dict["failed"] as? Int) ?? 0
+        )
+    }
+
+    public func removeTracks(_ pids: [String], fromPlaylistID playlistID: String) async throws -> PlaylistRemoveResult {
+        let raw = try bridge.removeTracks(withPersistentIDs: pids, fromPlaylistWithPersistentID: playlistID)
+        let dict = raw as? [String: Any] ?? [:]
+        return PlaylistRemoveResult(
+            removed: (dict["removed"] as? Int) ?? 0,
+            missing: (dict["missing"] as? Int) ?? 0,
             failed: (dict["failed"] as? Int) ?? 0
         )
     }

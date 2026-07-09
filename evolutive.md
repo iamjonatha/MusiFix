@@ -293,18 +293,6 @@ Rimandata su decisione esplicita dell'utente (sforzo alto / beneficio incerto ri
 a v1 metadati+euristiche): non implementata in questa sessione. Se ripresa in futuro:
 `AudioFeatureExtractor` sui file locali — **tempo/BPM** (onset detection, riuso infra Chromaprint di `Duplicates/`) → poi **tonalità** (chromagram + profili Krumhansl, richiede nuova libreria DSP, sforzo alto) → **energia**. Il *mood* resta solo approssimato da genere+tempo+energia (non ricavabile in modo affidabile senza modelli ML dedicati). Nessuna modifica a `PlaylistScorer`/UI grazie ai campi già predisposti (`nil`) in `PlaylistFeatures` dalla Fase 23.
 
-### Fase 25
+### Correzioni
 
-Genera un report (discografica.md) in cui includere: oer ogni artista con almeno un album completo, elenco degli album di quell'artista.
-
-Es.
-
-Vasco Rossi
-
-- Liberi Liberi
-
-Vinicio Capossela
-
-- Ovunque protoggi
-- Camere con vista
-- Modi
+- le playlist devono visualizzare i brani con ordinamento della playlist

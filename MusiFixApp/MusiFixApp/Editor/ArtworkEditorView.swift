@@ -15,6 +15,7 @@ struct ArtworkEditorView: View {
     @State private var showEnrichment = false
     @State private var zoom = false
     @State private var loadTask: Task<Void, Never>? = nil
+    @State private var lastKnownData: Data? = nil
 
     var pid: String { track.persistentID }
 
@@ -89,7 +90,11 @@ struct ArtworkEditorView: View {
         loadTask = Task {
             let data = try? await bridge.artwork(persistentID: p)
             guard !Task.isCancelled else { return }
-            await MainActor.run { isLoading = false; if let d = data { image = NSImage(data: d) } }
+            await MainActor.run {
+                isLoading = false
+                if let d = data { image = NSImage(data: d) }
+                lastKnownData = data
+            }
         }
     }
 
@@ -98,11 +103,14 @@ struct ArtworkEditorView: View {
     private func reloadAfterApply() {
         loadTask?.cancel()
         isLoading = true; error = nil
-        let bridge = appState.bridge; let p = pid
+        let bridge = appState.bridge; let p = pid; let previous = lastKnownData
         loadTask = Task {
-            let img = await Self.rereadArtwork(bridge: bridge, pid: p, retries: 4)
+            let result = await Self.rereadArtwork(bridge: bridge, pid: p, previousData: previous, retries: 4)
             guard !Task.isCancelled else { return }
-            await MainActor.run { isLoading = false; if let img { image = img } }
+            await MainActor.run {
+                isLoading = false
+                if let result { image = result.image; lastKnownData = result.data }
+            }
         }
     }
 
@@ -123,17 +131,22 @@ struct ArtworkEditorView: View {
 
     private func applyArtwork(_ data: Data) {
         isReplacing = true; error = nil
-        let bridge = appState.bridge; let p = pid
+        let bridge = appState.bridge; let p = pid; let previous = lastKnownData
         Task {
             do {
                 _ = try await appState.writeService.setArtwork(data, for: pid)
                 // Rilegge la copertina effettiva dal brano in Music (cloud library),
                 // non il dato locale: Music può ricomprimerla/ridimensionarla. Piccolo
-                // retry perché la persistenza cloud non è immediata.
-                let reread = await Self.rereadArtwork(bridge: bridge, pid: p, retries: 3)
+                // retry perché la persistenza cloud non è immediata, e si confronta col
+                // dato precedente per non scambiare la vecchia copertina per la nuova.
+                let reread = await Self.rereadArtwork(bridge: bridge, pid: p, previousData: previous, retries: 3)
                 await MainActor.run {
                     isReplacing = false
-                    image = reread ?? NSImage(data: data)   // fallback al dato locale
+                    if let reread {
+                        image = reread.image; lastKnownData = reread.data
+                    } else {
+                        image = NSImage(data: data); lastKnownData = data   // fallback al dato locale
+                    }
                 }
             } catch {
                 await MainActor.run { isReplacing = false; self.error = error.localizedDescription }
@@ -142,14 +155,24 @@ struct ArtworkEditorView: View {
     }
 
     /// Rilegge la copertina da Music con qualche tentativo, per dare tempo alla
-    /// cloud library di persistere il nuovo artwork.
-    private static func rereadArtwork(bridge: any AppleMusicBridge, pid: String, retries: Int) async -> NSImage? {
+    /// cloud library di persistere il nuovo artwork. Se `previousData` è fornito,
+    /// scarta i risultati identici ad esso: Music può restituire per un istante
+    /// ancora la copertina vecchia, e senza questo confronto verrebbe mostrata
+    /// come se fosse già quella nuova.
+    private static func rereadArtwork(
+        bridge: any AppleMusicBridge, pid: String, previousData: Data?, retries: Int
+    ) async -> (image: NSImage, data: Data)? {
+        var lastValid: (image: NSImage, data: Data)? = nil
         for attempt in 0..<max(retries, 1) {
             if attempt > 0 { try? await Task.sleep(nanoseconds: 800_000_000) }
-            if let data = try? await bridge.artwork(persistentID: pid), let img = NSImage(data: data) {
-                return img
+            guard let data = try? await bridge.artwork(persistentID: pid), let img = NSImage(data: data) else {
+                continue
             }
+            lastValid = (img, data)
+            if data != previousData { return lastValid }
         }
-        return nil
+        // Nessun risultato diverso dal precedente entro i tentativi: meglio l'ultima
+        // lettura valida (probabilmente la nuova, non ancora confermata) che nulla.
+        return lastValid
     }
 }

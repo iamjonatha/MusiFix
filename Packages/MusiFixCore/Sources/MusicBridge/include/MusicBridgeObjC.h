@@ -87,6 +87,12 @@ extern NSString * const MBKeyPlayedDate;  // NSDate
                           toPlaylistWithPersistentID:(NSString *)playlistID
                                                error:(NSError **)error;
 
+/// Rimuove i brani indicati (per persistentID) dalla playlist, senza eliminarli dalla
+/// libreria. @return NSDictionary con @"removed"/@"missing"/@"failed" (NSNumber). Nil in errore.
+- (nullable NSDictionary *)removeTracksWithPersistentIDs:(NSArray<NSString *> *)pids
+                             fromPlaylistWithPersistentID:(NSString *)playlistID
+                                                    error:(NSError **)error;
+
 @end
 
 NS_ASSUME_NONNULL_END

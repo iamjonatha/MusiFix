@@ -201,6 +201,27 @@ public struct DBPlaylist: Codable, FetchableRecord, PersistableRecord, Sendable,
     }
 }
 
+/// Annotazioni utente su una playlist (Fase 23+): descrizione libera e risultato
+/// desiderato in forma testuale. Persistite in una tabella separata da `playlist`
+/// perché quella viene rigenerata a ogni scansione (vedi `PlaylistDAO.replaceAll`).
+public struct DBPlaylistAnnotation: Codable, FetchableRecord, PersistableRecord, Sendable, Identifiable {
+    public static let databaseTableName = "playlist_annotation"
+    public var playlistID: String
+    public var playlistDescription: String
+    public var desiredResult: String
+    public var updatedAt: Date
+
+    public var id: String { playlistID }
+
+    public init(playlistID: String, playlistDescription: String = "",
+                desiredResult: String = "", updatedAt: Date = Date()) {
+        self.playlistID = playlistID
+        self.playlistDescription = playlistDescription
+        self.desiredResult = desiredResult
+        self.updatedAt = updatedAt
+    }
+}
+
 public struct DBOperation: Codable, FetchableRecord, PersistableRecord, Sendable {
     public static let databaseTableName = "operation_log"
     public var id: Int64?

@@ -29,9 +29,13 @@ public struct PlaylistFeatures: Sendable {
     public let totalDuration: Double
 
     // Artisti
+    /// Include gli artisti "featuring" estratti da titolo/artista (vedi `FeaturingParser`):
+    /// la percentuale è la quota di brani in cui l'artista compare, come primario o ospite.
     public let topArtists: [ArtistStat]
     public let dominantArtistPercentage: Double
     public let maxConsecutiveRepeats: Int
+    /// Numero di artisti distinti coinvolti (primari + ospiti/featuring).
+    public let distinctArtistCount: Int
 
     // Generi
     public let genreDistribution: [GenreStat]
@@ -72,6 +76,7 @@ public struct MetadataFeatureExtractor: PlaylistFeatureExtractor {
             return PlaylistFeatures(
                 trackCount: 0, totalDuration: 0,
                 topArtists: [], dominantArtistPercentage: 0, maxConsecutiveRepeats: 0,
+                distinctArtistCount: 0,
                 genreDistribution: [], genreDiversityIndex: 0, dominantGenrePercentage: 0,
                 yearRange: nil, distinctDecadesCount: 0, yearStdDeviation: 0,
                 averageDuration: 0, durationStdDeviation: 0, durationSequence: [],
@@ -87,8 +92,18 @@ public struct MetadataFeatureExtractor: PlaylistFeatureExtractor {
             return a.isEmpty ? t.artist : a
         }
 
+        // Conteggio artisti "presenti": primario + eventuali featuring dal titolo/artista.
+        // Ogni artista è contato una sola volta per brano (un ospite non gonfia il totale
+        // se coincide col primario).
         var artistCounts: [String: Int] = [:]
-        for t in tracks { artistCounts[artistOf(t), default: 0] += 1 }
+        for t in tracks {
+            var perTrack = Set<String>()
+            perTrack.insert(artistOf(t))
+            for guest in FeaturingParser.featuredArtists(title: t.name, artist: t.artist) {
+                perTrack.insert(guest)
+            }
+            for name in perTrack where !name.isEmpty { artistCounts[name, default: 0] += 1 }
+        }
         let topArtists: [PlaylistFeatures.ArtistStat] = artistCounts.sorted { $0.value > $1.value }.prefix(5).map {
             PlaylistFeatures.ArtistStat(name: $0.key, count: $0.value, percentage: Double($0.value) / n * 100)
         }
@@ -139,6 +154,7 @@ public struct MetadataFeatureExtractor: PlaylistFeatureExtractor {
             topArtists: Array(topArtists),
             dominantArtistPercentage: dominantArtistPct,
             maxConsecutiveRepeats: maxRepeat,
+            distinctArtistCount: artistCounts.count,
             genreDistribution: genreDist,
             genreDiversityIndex: diversityIndex,
             dominantGenrePercentage: dominantGenrePct,
