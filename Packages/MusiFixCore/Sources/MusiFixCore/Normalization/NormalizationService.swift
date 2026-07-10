@@ -27,6 +27,22 @@ public struct NormalizationResult: Sendable {
     public let errors: [(String, String)]   // (pid, messaggio)
 }
 
+/// Una variante di un nome artista scritta in un modo specifico, con il numero di brani.
+public struct ArtistVariant: Sendable, Identifiable {
+    public var id: String { name }
+    public let name: String
+    public let trackCount: Int
+}
+
+/// Un gruppo di nomi artista giudicati simili tra loro (scritti in modo diverso).
+/// L'utente sceglie il `suggestedName` (o lo modifica) come nome normalizzato del gruppo.
+public struct ArtistSimilarityGroup: Sendable, Identifiable {
+    public var id = UUID()
+    public let variants: [ArtistVariant]   // 2+ nomi simili, ordinati per frequenza discendente
+    public let suggestedName: String       // proposta iniziale (variante più frequente)
+    public var totalTracks: Int { variants.reduce(0) { $0 + $1.trackCount } }
+}
+
 /// Frammento SQL che esclude i brani "ignorati in MusiFix" (per PID o perché il
 /// loro album è ignorato). Da concatenare in coda a una WHERE già presente. (Fase 13)
 private let ignoreFilterSQL = """
@@ -227,6 +243,126 @@ public actor NormalizationService {
         return previews.sorted { $0.trackCount > $1.trackCount }
     }
 
+    // ── Similitudine artisti (fuzzy) ──────────────────────────────────────────
+
+    /// Individua gruppi di nomi artista scritti in modo diverso ma probabilmente
+    /// riferiti allo stesso artista (case/diacritici/punteggiatura diversi, refusi).
+    /// Non modifica nulla: restituisce i gruppi affinché l'utente scelga il nome
+    /// normalizzato per ciascuno.
+    ///
+    /// - Parameter threshold: soglia di similitudine [0,1] per accostare due nomi
+    ///   che non coincidono già dopo la normalizzazione della chiave (default 0.82).
+    public func findSimilarArtists(threshold: Double = 0.82) async throws -> [ArtistSimilarityGroup] {
+        // Nomi artista distinti col conteggio brani (escludendo gli ignorati).
+        let rows: [(name: String, count: Int)] = try db.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT artist AS name, COUNT(*) AS cnt
+                FROM track WHERE artist != '' AND TRIM(artist) != ''
+                \(ignoreFilterSQL)
+                GROUP BY artist
+                """)
+            .map { row -> (String, Int) in (row["name"], row["cnt"]) }
+        }
+        guard rows.count > 1 else { return [] }
+
+        let keys = rows.map { artistKey($0.name) }
+
+        // Union-find per raggruppare gli indici delle varianti equivalenti.
+        var parent = Array(0..<rows.count)
+        func find(_ x: Int) -> Int {
+            var r = x
+            while parent[r] != r { parent[r] = parent[parent[r]]; r = parent[r] }
+            return r
+        }
+        func union(_ a: Int, _ b: Int) {
+            let ra = find(a), rb = find(b)
+            if ra != rb { parent[ra] = rb }
+        }
+
+        // 1) Fusione esatta sulla chiave normalizzata (case/diacritici/punteggiatura).
+        var firstByKey: [String: Int] = [:]
+        for (i, k) in keys.enumerated() where !k.isEmpty {
+            if let j = firstByKey[k] { union(i, j) } else { firstByKey[k] = i }
+        }
+
+        // 2) Fusione fuzzy (refusi) limitata a blocchi per iniziale, per contenere il costo.
+        var buckets: [Character: [Int]] = [:]
+        for (i, k) in keys.enumerated() where !k.isEmpty {
+            buckets[k.first!, default: []].append(i)
+        }
+        for (_, idxs) in buckets {
+            for a in 0..<idxs.count {
+                for b in (a + 1)..<idxs.count {
+                    let i = idxs[a], j = idxs[b]
+                    if find(i) == find(j) { continue }
+                    let ki = keys[i], kj = keys[j]
+                    if abs(ki.count - kj.count) > 3 { continue }
+                    if similarity(ki, kj) >= threshold { union(i, j) }
+                }
+            }
+        }
+
+        // Raccogli i cluster con più di una variante.
+        var clusters: [Int: [Int]] = [:]
+        for i in 0..<rows.count where !keys[i].isEmpty { clusters[find(i), default: []].append(i) }
+
+        var result: [ArtistSimilarityGroup] = []
+        for (_, members) in clusters where members.count > 1 {
+            let variants = members
+                .map { ArtistVariant(name: rows[$0].name, trackCount: rows[$0].count) }
+                .sorted { $0.trackCount > $1.trackCount }
+            result.append(ArtistSimilarityGroup(variants: variants, suggestedName: variants[0].name))
+        }
+        return result.sorted { $0.totalTracks > $1.totalTracks }
+    }
+
+    /// Unifica le varianti indicate sotto `normalizedName`: registra gli alias (così
+    /// le future importazioni normalizzano da sole) e riscrive i brani su Music.
+    @discardableResult
+    public func unifyArtists(
+        variants: [String],
+        to normalizedName: String
+    ) async throws -> NormalizationResult {
+        let target = normalizedName.trimmingCharacters(in: .whitespaces)
+        guard !target.isEmpty else {
+            return NormalizationResult(updated: 0, failed: 0, errors: [])
+        }
+
+        var updated = 0; var failed = 0; var errors: [(String, String)] = []
+
+        for variant in variants where variant != target {
+            // Registra l'alias per le normalizzazioni future.
+            try db.write { db in
+                try db.execute(
+                    sql: "INSERT OR REPLACE INTO artist_alias (\"from\", \"to\") VALUES (?, ?)",
+                    arguments: [variant.lowercased(), target]
+                )
+            }
+
+            // Riscrivi i brani con questo valore originale.
+            let pids: [String] = try db.read { db in
+                try String.fetchAll(db, sql: """
+                    SELECT persistentID FROM track WHERE artist = ?
+                    \(ignoreFilterSQL)
+                    """,
+                    arguments: [variant])
+            }
+            let items: [(TrackMetadataUpdate, String)] = pids.map { pid in
+                var u = TrackMetadataUpdate(); u.artist = target
+                return (u, pid)
+            }
+            if !items.isEmpty {
+                let result = try await writeService.writeBatch(items)
+                updated += result.succeeded.count
+                failed += result.failed.count
+                errors.append(contentsOf: result.failed)
+            }
+        }
+
+        artistCache = nil
+        return NormalizationResult(updated: updated, failed: failed, errors: errors)
+    }
+
     /// Applica le normalizzazioni selezionate scrivendo su Music tramite writeService.
     public func applyNormalization(
         _ previews: [NormalizationPreview],
@@ -284,6 +420,49 @@ public actor NormalizationService {
         }
         artistCache = aliases
         return aliases
+    }
+
+    /// Chiave di confronto per un nome artista: minuscolo, senza diacritici,
+    /// punteggiatura ridotta a spazi, spazi collassati. Uguaglia varianti tipo
+    /// "Beyoncé"/"Beyonce", "Jay-Z"/"Jay Z", "The Beatles"/"the beatles".
+    private func artistKey(_ name: String) -> String {
+        let folded = name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+        var out = ""
+        out.reserveCapacity(folded.count)
+        for scalar in folded.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                out.unicodeScalars.append(scalar)
+            } else {
+                out.append(" ")
+            }
+        }
+        return out.split(separator: " ").joined(separator: " ")
+    }
+
+    /// Similitudine [0,1] tra due stringhe = 1 − distanzaLevenshtein / lunghezzaMax.
+    private func similarity(_ a: String, _ b: String) -> Double {
+        if a == b { return 1 }
+        if a.isEmpty || b.isEmpty { return 0 }
+        let dist = levenshtein(Array(a), Array(b))
+        let maxLen = max(a.count, b.count)
+        return 1.0 - Double(dist) / Double(maxLen)
+    }
+
+    /// Distanza di Levenshtein con due sole righe di lavoro.
+    private func levenshtein(_ a: [Character], _ b: [Character]) -> Int {
+        if a.isEmpty { return b.count }
+        if b.isEmpty { return a.count }
+        var prev = Array(0...b.count)
+        var curr = [Int](repeating: 0, count: b.count + 1)
+        for i in 1...a.count {
+            curr[0] = i
+            for j in 1...b.count {
+                let cost = a[i - 1] == b[j - 1] ? 0 : 1
+                curr[j] = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+            }
+            swap(&prev, &curr)
+        }
+        return prev[b.count]
     }
 
     /// Applica normalizzazione genere: alias lookup → casing → trim.

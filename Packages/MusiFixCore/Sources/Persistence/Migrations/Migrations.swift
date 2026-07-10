@@ -19,6 +19,33 @@ public enum Migrations {
         migrator.registerMigration("v12_played_count", migrate: v12_played_count)
         migrator.registerMigration("v13_playlist_annotation", migrate: v13_playlist_annotation)
         migrator.registerMigration("v14_playlist_track_position", migrate: v14_playlist_track_position)
+        migrator.registerMigration("v15_mcp_proposal", migrate: v15_mcp_proposal)
+    }
+
+    // ── v15: proposte di scrittura staged dal server MCP ──────────────────────
+    // Un agente AI (via server MCP) non scrive mai direttamente su Music: deposita
+    // una "proposta" di aggiornamento metadati che l'utente rivede e approva in UI.
+    // All'approvazione la proposta viene applicata via MetadataWriteService.writeBatch
+    // (stesso canale audit/undo della UI) e `batchID` collega la proposta al batch.
+    private static func v15_mcp_proposal(_ db: Database) throws {
+        try db.create(table: "mcp_proposal") { t in
+            t.primaryKey("id", .text)                 // UUID
+            t.column("createdAt", .datetime).notNull()
+            t.column("source", .text).notNull().defaults(to: "mcp")
+            t.column("rationale", .text).notNull().defaults(to: "")
+            t.column("status", .text).notNull().defaults(to: "pending")  // pending|applied|rejected
+            t.column("batchID", .text)                // valorizzato all'applicazione
+            t.column("decidedAt", .datetime)          // quando applicata/rifiutata
+        }
+        try db.create(index: "mcp_proposal_status", on: "mcp_proposal", columns: ["status"])
+        // Un item = un aggiornamento (campi opzionali serializzati in JSON) per un brano.
+        try db.create(table: "mcp_proposal_item") { t in
+            t.autoIncrementedPrimaryKey("id")
+            t.column("proposalID", .text).notNull()
+            t.column("persistentID", .text).notNull()
+            t.column("updateJSON", .text).notNull()
+        }
+        try db.create(index: "mcp_proposal_item_pid", on: "mcp_proposal_item", columns: ["proposalID"])
     }
 
     // ── v14: posizione del brano nella playlist ───────────────────────────────

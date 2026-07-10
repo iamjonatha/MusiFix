@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var playlistScanDone = true
     @State private var artworkScanDone = true
     @State private var showAutoSyncSettings = false
+    @State private var showMCPProposals = false
 
     var selectedTrack: DBTrack? {
         guard browser.selectedPIDs.count == 1 else { return nil }
@@ -130,6 +131,22 @@ struct ContentView: View {
                     Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
                 }
                 .help("Cronologia operazioni")
+
+                Button { showMCPProposals = true } label: {
+                    Image(systemName: "sparkles.rectangle.stack")
+                        .foregroundStyle(appState.mcpServerRunning ? Color.accentColor : Color.secondary)
+                        .overlay(alignment: .topTrailing) {
+                            if appState.mcpPendingProposals > 0 {
+                                Text("\(appState.mcpPendingProposals)")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4).padding(.vertical, 1)
+                                    .background(Color.red, in: Capsule())
+                                    .offset(x: 8, y: -8)
+                            }
+                        }
+                }
+                .help("Server MCP e proposte AI\(appState.mcpPendingProposals > 0 ? " (\(appState.mcpPendingProposals) in attesa)" : "")")
 
                 Button("Indicizza tutto") { appState.startFullIndex() }
                     .disabled(appState.isIndexing)
@@ -575,6 +592,13 @@ struct ContentView: View {
                 service: appState.divergenceService,
                 pids: Array(browser.selectedPIDs),
                 isPresented: $showDivergence,
+                onApplied: { browser.loadInitialPage(db: appState.db) }
+            )
+        }
+        .sheet(isPresented: $showMCPProposals) {
+            MCPProposalsView(
+                appState: appState,
+                isPresented: $showMCPProposals,
                 onApplied: { browser.loadInitialPage(db: appState.db) }
             )
         }

@@ -22,6 +22,14 @@ struct NormalizationView: View {
     @State private var newAliasFrom = ""; @State private var newAliasTo = ""
     @State private var aliasTab = 0
 
+    // Tab "Simili"
+    @State private var similarGroups: [ArtistSimilarityGroup] = []
+    @State private var groupNames: [UUID: String] = [:]           // nome normalizzato scelto per gruppo
+    @State private var groupExcluded: [UUID: Set<String>] = [:]   // varianti escluse per gruppo
+    @State private var isFindingSimilar = false
+    @State private var unifyingGroup: UUID? = nil
+    @State private var similarityThreshold: Double = 0.82
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
@@ -38,7 +46,8 @@ struct NormalizationView: View {
 
             TabView(selection: $selectedTab) {
                 previewTab.tabItem { Label("Anteprima", systemImage: "wand.and.stars") }.tag(0)
-                aliasTab_view.tabItem { Label("Alias", systemImage: "list.bullet") }.tag(1)
+                similarTab.tabItem { Label("Simili", systemImage: "person.2.badge.gearshape") }.tag(1)
+                aliasTab_view.tabItem { Label("Alias", systemImage: "list.bullet") }.tag(2)
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -53,10 +62,12 @@ struct NormalizationView: View {
                     Text(msg).font(.caption).foregroundStyle(.secondary)
                 }
                 if isApplying { ProgressView().scaleEffect(0.7) }
-                Button("Applica selezionati") { applySelected() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isApplying || selectedPreviews.isEmpty)
-                    .keyboardShortcut(.defaultAction)
+                if selectedTab != 1 {
+                    Button("Applica selezionati") { applySelected() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isApplying || selectedPreviews.isEmpty)
+                        .keyboardShortcut(.defaultAction)
+                }
             }
             .padding(16)
         }
@@ -105,6 +116,101 @@ struct NormalizationView: View {
                     }
                 }
             }
+        }
+    }
+
+    // ── Tab Simili ────────────────────────────────────────────────────────────
+
+    private var similarTab: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text("Gruppi di artisti scritti in modo diverso ma probabilmente uguali. "
+                     + "Indica il nome normalizzato e unifica.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    Task { await findSimilar() }
+                } label: {
+                    Label("Ricalcola", systemImage: "arrow.clockwise")
+                }.disabled(isFindingSimilar)
+            }
+            .padding(.top, 4)
+
+            HStack(spacing: 8) {
+                Text("Soglia similitudine").font(.caption).foregroundStyle(.secondary)
+                Slider(value: $similarityThreshold, in: 0.60...0.98, step: 0.01) {
+                    Text("Soglia")
+                } minimumValueLabel: {
+                    Text("permissiva").font(.caption2).foregroundStyle(.secondary)
+                } maximumValueLabel: {
+                    Text("rigida").font(.caption2).foregroundStyle(.secondary)
+                }
+                Text(String(format: "%.2f", similarityThreshold))
+                    .font(.system(size: 12, design: .monospaced))
+                    .frame(width: 36, alignment: .trailing)
+            }
+
+            if isFindingSimilar {
+                Spacer(); ProgressView("Ricerca similitudini…"); Spacer()
+            } else if similarGroups.isEmpty {
+                Spacer()
+                Text("Nessun gruppo di artisti simili individuato.").foregroundStyle(.secondary)
+                Spacer()
+            } else {
+                ScrollView {
+                    VStack(spacing: 10) {
+                        ForEach(similarGroups) { group in
+                            groupCard(group)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .onAppear { if similarGroups.isEmpty { Task { await findSimilar() } } }
+    }
+
+    @ViewBuilder
+    private func groupCard(_ group: ArtistSimilarityGroup) -> some View {
+        let excluded = groupExcluded[group.id] ?? []
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(group.variants) { v in
+                    HStack {
+                        Toggle("", isOn: Binding(
+                            get: { !excluded.contains(v.name) },
+                            set: { on in
+                                var set = groupExcluded[group.id] ?? []
+                                if on { set.remove(v.name) } else { set.insert(v.name) }
+                                groupExcluded[group.id] = set
+                            }
+                        )).labelsHidden()
+                        Text(v.name).font(.system(size: 12, design: .monospaced))
+                        Spacer()
+                        Text("\(v.trackCount)").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                Divider()
+
+                HStack(spacing: 8) {
+                    Text("Normalizza a:").font(.caption).foregroundStyle(.secondary)
+                    TextField("nome normalizzato", text: Binding(
+                        get: { groupNames[group.id] ?? group.suggestedName },
+                        set: { groupNames[group.id] = $0 }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    if unifyingGroup == group.id {
+                        ProgressView().scaleEffect(0.6)
+                    }
+                    Button("Unifica") { unify(group) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(unifyingGroup != nil
+                                  || (groupNames[group.id] ?? group.suggestedName)
+                                      .trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .padding(4)
         }
     }
 
@@ -187,6 +293,52 @@ struct NormalizationView: View {
                 await loadPreviews()
             } catch {
                 await MainActor.run { resultMessage = error.localizedDescription; isApplying = false }
+            }
+        }
+    }
+
+    private func findSimilar() async {
+        isFindingSimilar = true; resultMessage = nil
+        do {
+            let groups = try await appState.normalizationService.findSimilarArtists(
+                threshold: similarityThreshold)
+            await MainActor.run {
+                similarGroups = groups
+                groupExcluded = [:]
+                groupNames = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0.suggestedName) })
+                isFindingSimilar = false
+            }
+        } catch {
+            await MainActor.run {
+                resultMessage = "Errore: \(error.localizedDescription)"
+                isFindingSimilar = false
+            }
+        }
+    }
+
+    private func unify(_ group: ArtistSimilarityGroup) {
+        let target = (groupNames[group.id] ?? group.suggestedName)
+            .trimmingCharacters(in: .whitespaces)
+        guard !target.isEmpty else { return }
+        let excluded = groupExcluded[group.id] ?? []
+        let variants = group.variants.map(\.name).filter { !excluded.contains($0) }
+        guard !variants.isEmpty else { return }
+
+        unifyingGroup = group.id; resultMessage = nil
+        Task {
+            do {
+                let result = try await appState.normalizationService.unifyArtists(
+                    variants: variants, to: target)
+                await MainActor.run {
+                    resultMessage = "Unificati: \(result.updated)\(result.failed > 0 ? " · Errori: \(result.failed)" : "")"
+                    similarGroups.removeAll { $0.id == group.id }
+                    unifyingGroup = nil
+                }
+            } catch {
+                await MainActor.run {
+                    resultMessage = error.localizedDescription
+                    unifyingGroup = nil
+                }
             }
         }
     }

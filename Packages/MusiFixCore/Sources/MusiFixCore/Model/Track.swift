@@ -151,7 +151,7 @@ public enum CloudStatus: String, Sendable {
 }
 
 /// Campi modificabili via Apple Music automation.
-public struct TrackMetadataUpdate: Sendable {
+public struct TrackMetadataUpdate: Sendable, Codable {
     public var name: String?
     public var artist: String?
     public var albumArtist: String?

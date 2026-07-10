@@ -293,6 +293,21 @@ Rimandata su decisione esplicita dell'utente (sforzo alto / beneficio incerto ri
 a v1 metadati+euristiche): non implementata in questa sessione. Se ripresa in futuro:
 `AudioFeatureExtractor` sui file locali — **tempo/BPM** (onset detection, riuso infra Chromaprint di `Duplicates/`) → poi **tonalità** (chromagram + profili Krumhansl, richiede nuova libreria DSP, sforzo alto) → **energia**. Il *mood* resta solo approssimato da genere+tempo+energia (non ricavabile in modo affidabile senza modelli ML dedicati). Nessuna modifica a `PlaylistScorer`/UI grazie ai campi già predisposti (`nil`) in `PlaylistFeatures` dalla Fase 23.
 
+### Fase 25 — Server MCP embedded (lettura libreria + scritture staged)  ✅
+Espone la libreria a un agente AI esterno (Claude Desktop/Code) via **MCP** su
+trasporto **Streamable HTTP** in loopback, attivabile/spegnibile dalla UI.
+
+Architettura (tutto in `MusiFixCore/MCPServer/`, riusa i DAO e il canale di scrittura esistenti):
+- **`MCPHTTPServer`** (`NWListener` su `127.0.0.1`, `requiredInterfaceType = .loopback`): parser HTTP minimale, gestisce `Expect: 100-continue`. ⚠️ Le `HTTPConnection` vanno **trattenute** dal server (dict `active`) finché non completano, altrimenti si deallocano e i callback `receive` vengono persi (bug diagnosticato: connessione accettata ma nessuna risposta).
+- **`JSONValue`**: tipo JSON dinamico `Sendable` (niente `[String:Any]`), con Codable + literal ergonomici, per costruire/leggere i messaggi JSON-RPC 2.0.
+- **`MCPServerService`** (actor): dispatch JSON-RPC (`initialize`, `tools/list`, `tools/call`, `ping`), auth `Bearer` opzionale. Serializza le richieste sull'actor.
+- **Tool read** (sempre): `search_tracks` (testo/artista/album/genere/anno/intervallo in AND, via nuovo `TrackDAO.searchAdvanced`), `list_playlists`, `get_playlist` (brani in ordine), `library_stats`.
+- **Tool write (staged)**: `propose_metadata_update` (singolo/lista/`items` con `fields` opzionali) **non scrive**: crea una proposta pending; `undo_batch`. Annotazioni MCP `readOnlyHint`/`destructiveHint`. Tetto di sicurezza `maxProposalItems = 500`.
+- **Approvazione umana**: `MCPProposalService` (actor) + tabelle **`mcp_proposal`/`mcp_proposal_item`** (migrazione **v15**) + DAO `ProposalDAO`. La UI **`MCPProposals/MCPProposalsView`** mostra la coda con diff prima→dopo per brano e Applica/Rifiuta; l'applicazione passa da `MetadataWriteService.writeBatch` (stesso audit/undo della UI). Toggle **auto-approvazione** opzionale (salta l'attesa; undo resta la rete di sicurezza).
+- **UI**: pulsante in toolbar `ContentView` con badge delle proposte in attesa → sheet con controlli server (porta/token/auto-start/auto-approva) e coda. `AppState`: `mcpProposalService`/`mcpServerService`, start/stop, `mcpServerRunning`/`mcpPendingProposals`, auto-start opzionale all'avvio.
+- **Verifica**: eseguibile standalone che avvia il server e lo interroga via HTTP reale (initialize/tools/list/search combinati/library_stats/proposta staged/pid inesistente/metodo sconosciuto) — 14/14 check verdi.
+- **File:** `Packages/MusiFixCore/Sources/MusiFixCore/MCPServer/{JSONValue,MCPHTTPServer,MCPServerService,MCPTools,MCPProposalService}.swift` (nuovi), `Persistence/{DBTrack,Migrations,DAO/TrackDAO,DAO/ProposalDAO}.swift`, `Model/Track.swift` (`TrackMetadataUpdate: Codable`), `MusiFixApp/{AppState,ContentView,MCPProposals/MCPProposalsView}.swift`.
+
 ### Correzioni
 
-- le playlist devono visualizzare i brani con ordinamento della playlist
+- la normalizzazione artisti deve permettere di indicare il nome normalizzato a fronte di una similitudine individuata tra più nomi di artisti scritti in modo diverso

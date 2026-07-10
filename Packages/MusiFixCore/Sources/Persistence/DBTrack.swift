@@ -244,6 +244,42 @@ public struct DBOperation: Codable, FetchableRecord, PersistableRecord, Sendable
     }
 }
 
+/// Proposta di scrittura staged da un agente AI via server MCP (migrazione v15).
+/// Rivista e approvata dall'utente prima di toccare Music.app.
+public struct DBProposal: Codable, FetchableRecord, PersistableRecord, Sendable, Identifiable {
+    public static let databaseTableName = "mcp_proposal"
+    public var id: String
+    public var createdAt: Date
+    public var source: String
+    public var rationale: String
+    public var status: String              // "pending" | "applied" | "rejected"
+    public var batchID: String?
+    public var decidedAt: Date?
+
+    public init(id: String, createdAt: Date = Date(), source: String = "mcp",
+                rationale: String = "", status: String = "pending",
+                batchID: String? = nil, decidedAt: Date? = nil) {
+        self.id = id; self.createdAt = createdAt; self.source = source
+        self.rationale = rationale; self.status = status
+        self.batchID = batchID; self.decidedAt = decidedAt
+    }
+}
+
+/// Singolo item di una proposta MCP: aggiornamento metadati (campi opzionali
+/// serializzati in `updateJSON`) per un brano.
+public struct DBProposalItem: Codable, FetchableRecord, PersistableRecord, Sendable {
+    public static let databaseTableName = "mcp_proposal_item"
+    public var id: Int64?
+    public var proposalID: String
+    public var persistentID: String
+    public var updateJSON: String
+
+    public init(id: Int64? = nil, proposalID: String, persistentID: String, updateJSON: String) {
+        self.id = id; self.proposalID = proposalID
+        self.persistentID = persistentID; self.updateJSON = updateJSON
+    }
+}
+
 /// Cache delle info album recuperate dallo Store (iTunes) — Fase D.
 public struct DBAlbumStoreInfo: Codable, FetchableRecord, PersistableRecord, Sendable {
     public static let databaseTableName = "album_store_info"

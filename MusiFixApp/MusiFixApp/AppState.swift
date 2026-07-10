@@ -24,11 +24,18 @@ final class AppState: ObservableObject {
     let playlistAnalysisService: PlaylistAnalysisService
     let advancedPlaylistAnalysisService: AdvancedPlaylistAnalysisService
     let fileCopyService = FileCopyService()
+    let mcpProposalService: MCPProposalService
+    let mcpServerService: MCPServerService
 
     @Published var indexProgress: IndexProgress = .init(
         phase: .idle, processed: 0, total: 0, lastSyncDate: nil
     )
     @Published var isIndexing: Bool = false
+
+    /// Stato del server MCP (Fase 25).
+    @Published var mcpServerRunning = false
+    @Published var mcpPendingProposals = 0
+    @Published var mcpServerError: String?
 
     private var indexTask: Task<Void, Never>?
     private var autoSyncTask: Task<Void, Never>?
@@ -37,6 +44,12 @@ final class AppState: ObservableObject {
     static let autoSyncEnabledKey = "autoSyncEnabled"
     static let autoSyncMinutesKey = "autoSyncMinutes"
     static let autoSyncDefaultMinutes = 30
+
+    /// Chiavi UserDefaults per il server MCP (Fase 25).
+    static let mcpPortKey = "mcpServerPort"
+    static let mcpTokenKey = "mcpServerToken"
+    static let mcpAutoApplyKey = "mcpServerAutoApply"
+    static let mcpAutoStartKey = "mcpServerAutoStart"
 
     init() {
         let appSupport = FileManager.default
@@ -65,8 +78,54 @@ final class AppState: ObservableObject {
         self.playlistService = PlaylistService(bridge: bridge)
         self.playlistAnalysisService = PlaylistAnalysisService(db: db)
         self.advancedPlaylistAnalysisService = AdvancedPlaylistAnalysisService(db: db)
+        self.mcpProposalService = MCPProposalService(db: db, writeService: writeService)
+        self.mcpServerService = MCPServerService(db: db, proposals: mcpProposalService)
 
         configureAutoSync()
+        refreshMCPPendingCount()
+        if UserDefaults.standard.bool(forKey: Self.mcpAutoStartKey) {
+            startMCPServer()
+        }
+    }
+
+    // ── Server MCP (Fase 25) ───────────────────────────────────────────────────
+
+    /// Avvia il server MCP con i parametri salvati (porta, token, auto-approvazione).
+    func startMCPServer() {
+        let defaults = UserDefaults.standard
+        let storedPort = defaults.integer(forKey: Self.mcpPortKey)
+        let port = UInt16(storedPort > 0 && storedPort <= 65535 ? storedPort : Int(MCPServerService.defaultPort))
+        let token = defaults.string(forKey: Self.mcpTokenKey)
+        let autoApply = defaults.bool(forKey: Self.mcpAutoApplyKey)
+        Task {
+            do {
+                try await mcpServerService.start(port: port, token: token, autoApply: autoApply)
+                self.mcpServerRunning = true
+                self.mcpServerError = nil
+            } catch {
+                self.mcpServerRunning = false
+                self.mcpServerError = error.localizedDescription
+            }
+        }
+    }
+
+    func stopMCPServer() {
+        Task {
+            await mcpServerService.stop()
+            self.mcpServerRunning = false
+        }
+    }
+
+    func toggleMCPServer() {
+        if mcpServerRunning { stopMCPServer() } else { startMCPServer() }
+    }
+
+    /// Aggiorna il conteggio delle proposte AI in attesa di approvazione.
+    func refreshMCPPendingCount() {
+        Task {
+            let n = (try? await mcpProposalService.pendingCount()) ?? 0
+            self.mcpPendingProposals = n
+        }
     }
 
     func startFullIndex() {

@@ -27,6 +27,7 @@
 		AA000032 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000032 /* DashboardView.swift */; };
 		AA000033 /* DeletionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000033 /* DeletionView.swift */; };
 		AA000034 /* DivergenceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000034 /* DivergenceView.swift */; };
+		AA000050 /* MCPProposalsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000050 /* MCPProposalsView.swift */; };
 		AA000035 /* AlbumsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000035 /* AlbumsView.swift */; };
 		AA000040 /* OrphansView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000040 /* OrphansView.swift */; };
 		AA000041 /* PlaylistsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000041 /* PlaylistsView.swift */; };
@@ -54,6 +55,7 @@
 		BB000032 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
 		BB000033 /* DeletionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeletionView.swift; sourceTree = "<group>"; };
 		BB000034 /* DivergenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DivergenceView.swift; sourceTree = "<group>"; };
+		BB000050 /* MCPProposalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPProposalsView.swift; sourceTree = "<group>"; };
 		BB000035 /* AlbumsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumsView.swift; sourceTree = "<group>"; };
 		BB000040 /* OrphansView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrphansView.swift; sourceTree = "<group>"; };
 		BB000041 /* PlaylistsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistsView.swift; sourceTree = "<group>"; };
@@ -98,6 +100,7 @@
 				EE000009 /* Albums */,
 				EE000010 /* Orphans */,
 				EE000011 /* Playlists */,
+				EE000012 /* MCPProposals */,
 				BB000090 /* Assets.xcassets */,
 				BB000010 /* Info.plist */,
 				BB000011 /* MusiFixApp.entitlements */,
@@ -191,6 +194,14 @@
 				BB000041 /* PlaylistsView.swift */,
 			);
 			path = Playlists;
+			sourceTree = "<group>";
+		};
+		EE000012 /* MCPProposals */ = {
+			isa = PBXGroup;
+			children = (
+				BB000050 /* MCPProposalsView.swift */,
+			);
+			path = MCPProposals;
 			sourceTree = "<group>";
 		};
 		FF000001 /* Products */ = {
@@ -296,6 +307,7 @@
 				AA000032 /* DashboardView.swift in Sources */,
 				AA000033 /* DeletionView.swift in Sources */,
 				AA000034 /* DivergenceView.swift in Sources */,
+				AA000050 /* MCPProposalsView.swift in Sources */,
 				AA000035 /* AlbumsView.swift in Sources */,
 				AA000040 /* OrphansView.swift in Sources */,
 				AA000041 /* PlaylistsView.swift in Sources */,

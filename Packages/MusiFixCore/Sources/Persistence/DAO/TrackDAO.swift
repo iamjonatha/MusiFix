@@ -92,6 +92,61 @@ public struct TrackDAO: Sendable {
         return try DBTrack.fetchAll(db, sql: sql, arguments: [pattern, limit, offset])
     }
 
+    /// Ricerca combinata (AND) per il server MCP: filtri opzionali su testo
+    /// (sottostringa in titolo/artista/album), artista, album, genere e anno /
+    /// intervallo di anni. I confronti testuali sono case-insensitive.
+    public static func searchAdvanced(
+        text: String? = nil,
+        artist: String? = nil,
+        album: String? = nil,
+        genre: String? = nil,
+        year: Int? = nil,
+        yearFrom: Int? = nil,
+        yearTo: Int? = nil,
+        limit: Int = 100,
+        offset: Int = 0,
+        in db: Database
+    ) throws -> [DBTrack] {
+        var clauses: [String] = []
+        var args: [DatabaseValueConvertible] = []
+
+        func like(_ column: String, _ value: String) {
+            clauses.append("\(column) LIKE ? ESCAPE '\\'")
+            args.append("%\(escapeLike(value))%")
+        }
+
+        if let t = text?.trimmingCharacters(in: .whitespaces), !t.isEmpty {
+            clauses.append("(name LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\' OR album LIKE ? ESCAPE '\\')")
+            let p = "%\(escapeLike(t))%"
+            args.append(contentsOf: [p, p, p])
+        }
+        if let a = artist?.trimmingCharacters(in: .whitespaces), !a.isEmpty { like("artist", a) }
+        if let a = album?.trimmingCharacters(in: .whitespaces), !a.isEmpty { like("album", a) }
+        if let g = genre?.trimmingCharacters(in: .whitespaces), !g.isEmpty { like("genre", g) }
+        if let y = year { clauses.append("year = ?"); args.append(y) }
+        if let f = yearFrom { clauses.append("year >= ?"); args.append(f) }
+        if let t = yearTo { clauses.append("year <= ?"); args.append(t) }
+
+        let whereSQL = clauses.isEmpty ? "" : "WHERE " + clauses.joined(separator: " AND ")
+        let sql = """
+            SELECT * FROM track
+            \(whereSQL)
+            ORDER BY artistNormalized, albumNormalized, discNumber, trackNumber
+            LIMIT ? OFFSET ?
+            """
+        args.append(max(1, limit))
+        args.append(max(0, offset))
+        return try DBTrack.fetchAll(db, sql: sql, arguments: StatementArguments(args))
+    }
+
+    /// Esegue l'escape dei metacaratteri LIKE (`%` `_` `\`) per usare l'input
+    /// utente come sottostringa letterale.
+    private static func escapeLike(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "%", with: "\\%")
+         .replacingOccurrences(of: "_", with: "\\_")
+    }
+
     // ── Modifica singolo campo ─────────────────────────────────────────────────
 
     public static func updateField(
